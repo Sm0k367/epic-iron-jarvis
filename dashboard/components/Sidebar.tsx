@@ -14,15 +14,18 @@ import {
   Bot,
   CalendarClock,
   FileSearch,
+  FileText,
+  GraduationCap,
   Database,
   KeyRound,
   Plug,
+  PlugZap,
   Megaphone,
   Webhook,
   type LucideIcon,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
-import { useEvents } from "@/lib/useEvents";
+import { useDaemon } from "@/lib/daemon";
 
 interface NavItem {
   href: string;
@@ -32,6 +35,7 @@ interface NavItem {
 
 const NAV: NavItem[] = [
   { href: "/", label: "Overview", icon: LayoutDashboard },
+  { href: "/connections", label: "Connections", icon: PlugZap },
   { href: "/sessions", label: "Sessions", icon: Boxes },
   { href: "/kanban", label: "Kanban", icon: SquareKanban },
   { href: "/agents", label: "Agents", icon: Bot },
@@ -39,8 +43,10 @@ const NAV: NavItem[] = [
   { href: "/schedules", label: "Schedules", icon: CalendarClock },
   { href: "/skills", label: "Skills", icon: Sparkles },
   { href: "/memory", label: "Memory", icon: BrainCircuit },
+  { href: "/lessons", label: "What I've learned", icon: GraduationCap },
   { href: "/ltm", label: "Long-term Memory", icon: Database },
   { href: "/filesearch", label: "File Search", icon: FileSearch },
+  { href: "/documents", label: "Documents", icon: FileText },
   { href: "/artifacts", label: "Artifacts", icon: Package },
   { href: "/secrets", label: "Secrets", icon: KeyRound },
   { href: "/integrations", label: "Integrations", icon: Plug },
@@ -90,7 +96,7 @@ function ArcMark() {
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { connected } = useEvents(1);
+  const { online: connected } = useDaemon();
   const isActive = (href: string) =>
     href === "/" ? pathname === "/" : pathname.startsWith(href);
 
@@ -161,6 +167,12 @@ export function Sidebar() {
         </div>
         <div className="truncate font-mono text-[11px] text-zinc-600" title={API_BASE}>
           {API_BASE.replace(/^https?:\/\//, "")}
+        </div>
+        <div className="flex items-center gap-1.5 pt-0.5 text-[11px] text-zinc-600">
+          <kbd className="rounded border border-white/10 bg-white/[0.03] px-1.5 py-0.5 font-sans text-[10px] text-zinc-500">
+            ⌘K
+          </kbd>
+          <span>commands</span>
         </div>
       </div>
     </aside>

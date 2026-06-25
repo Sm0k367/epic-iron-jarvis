@@ -60,12 +60,13 @@ class Orchestrator:
         task: str,
         agent_type: AgentType = AgentType.BUILDER,
         provider: str | None = None,
+        model: str | None = None,
     ) -> Session:
         session = Session(
             task=task,
             agent_type=agent_type,
             provider=provider or self.p.config.default_provider,
-            model=self.p.config.default_model,
+            model=model or self.p.config.default_model,
             status=SessionStatus.ACTIVE,
         )
         workspace = self.p.config.workspaces_dir / session.id
@@ -118,6 +119,17 @@ class Orchestrator:
             self.p.evaluator.evaluate(session.id)
         except Exception:  # noqa: BLE001
             log.exception("evaluation failed for session %s", session.id)
+
+        # Self-correction: reflect on what happened into a durable lesson.
+        try:
+            self.p.learning.reflect(
+                session.id,
+                task=session.task,
+                summary=session.summary,
+                ok=session.status is SessionStatus.COMPLETED,
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("reflection failed for session %s", session.id)
 
         # Phase 7: if this ran on a git worktree, build a review — never auto-merge.
         gs = self._git_sessions.get(session.id)

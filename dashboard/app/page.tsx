@@ -10,6 +10,7 @@ import {
   ShieldCheck,
   Boxes,
   ArrowRight,
+  PlugZap,
 } from "lucide-react";
 import { usePolledApi, useApi } from "@/lib/useApi";
 import type { Health, Metrics, VaultProvider, SessionView } from "@/lib/types";
@@ -22,11 +23,13 @@ import {
   Spinner,
   OfflineHint,
   Empty,
+  MockChip,
   SkeletonRows,
   Skeleton,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { EventStream } from "@/components/EventStream";
+import { OnboardingWelcome } from "@/components/OnboardingWelcome";
 import { PageShell, Reveal } from "@/components/motion";
 import { pct, num, timeAgo, shortId } from "@/lib/format";
 
@@ -61,6 +64,11 @@ export default function OverviewPage() {
           <OfflineHint />
         </Reveal>
       )}
+
+      {/* First-run welcome + getting-started checklist */}
+      <Reveal>
+        <OnboardingWelcome />
+      </Reveal>
 
       {/* Metric cards */}
       <Reveal>
@@ -116,9 +124,21 @@ export default function OverviewPage() {
                     <span className="font-mono text-xs text-zinc-500">{p.class}</span>
                   </div>
                 ))}
+                {!health.data.providers.some(
+                  (p) => p.available && p.provider !== "mock" && p.class !== "mock",
+                ) && (
+                  <Link
+                    href="/connections"
+                    className="mt-1 flex items-center justify-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-2 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]"
+                  >
+                    <PlugZap size={14} /> Connect a real model <ArrowRight size={12} />
+                  </Link>
+                )}
               </div>
             ) : (
-              <Empty icon={<Server size={22} />}>No provider data.</Empty>
+              <Empty icon={<Server size={22} />} action={{ label: "Connect a model", href: "/connections" }}>
+                No provider data.
+              </Empty>
             )}
           </Card>
 
@@ -139,7 +159,12 @@ export default function OverviewPage() {
                 ))}
               </div>
             ) : (
-              <Empty icon={<ShieldCheck size={22} />}>No vault providers configured.</Empty>
+              <Empty
+                icon={<ShieldCheck size={22} />}
+                action={{ label: "Connect a model", href: "/connections" }}
+              >
+                No vault providers configured.
+              </Empty>
             )}
           </Card>
 
@@ -179,6 +204,7 @@ export default function OverviewPage() {
                         <span>{s.agent_type}</span>
                         <span>·</span>
                         <span>{timeAgo(s.created_at)}</span>
+                        {s.provider === "mock" && <MockChip className="ml-auto" />}
                       </div>
                     </Link>
                   </li>

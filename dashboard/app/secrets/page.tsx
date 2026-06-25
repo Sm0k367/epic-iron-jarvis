@@ -172,7 +172,12 @@ export default function SecretsPage() {
               {loading && !data ? (
                 <SkeletonRows rows={5} />
               ) : secrets.length === 0 ? (
-                <Empty icon={<KeyRound size={24} />}>No secrets stored yet.</Empty>
+                <Empty
+                  icon={<KeyRound size={24} />}
+                  action={{ label: "Connect a model", href: "/connections" }}
+                >
+                  No secrets stored yet. Most people start by connecting a model.
+                </Empty>
               ) : (
                 <div className="-mx-1 overflow-x-auto">
                   <table className="w-full text-left text-sm">

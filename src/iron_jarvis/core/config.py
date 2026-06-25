@@ -59,6 +59,13 @@ def default_permissions() -> dict[str, str]:
         "schedule_create": "allow",
         "webhook_add": "allow",
         "workflow_create": "allow",
+        # Documents (read any file type; write within the workspace).
+        "read_document": "allow",
+        "write_document": "allow",
+        "extract_pdf": "allow",
+        # Self-correcting learning loop.
+        "remember_preference": "allow",
+        "recall_lessons": "allow",
     }
 
 

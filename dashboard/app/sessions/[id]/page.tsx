@@ -10,14 +10,15 @@ import {
   Badge,
   Stat,
   StatusDot,
-  Spinner,
   OfflineHint,
   Empty,
+  MockChip,
   SkeletonRows,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { ReviewPanel } from "@/components/ReviewPanel";
 import { TracesPanel } from "@/components/TracesPanel";
+import { SessionFeedback } from "@/components/SessionFeedback";
 import { PageShell, Reveal } from "@/components/motion";
 import { pct, num, clockTime, shortId } from "@/lib/format";
 
@@ -80,7 +81,12 @@ export default function SessionDetailPage({
             <Card
               title="Summary"
               icon={<FileText size={15} />}
-              right={<Badge value={session.status} />}
+              right={
+                <span className="flex items-center gap-2">
+                  {session.provider === "mock" && <MockChip />}
+                  <Badge value={session.status} />
+                </span>
+              }
             >
               <div className="mb-4 flex items-start gap-2.5 text-[15px] text-zinc-100">
                 <StatusDot status={session.status} className="mt-1.5" />
@@ -113,6 +119,11 @@ export default function SessionDetailPage({
                 </div>
               )}
             </Card>
+          </Reveal>
+
+          {/* Feedback — how did I do? */}
+          <Reveal>
+            <SessionFeedback sessionId={id} />
           </Reveal>
 
           {/* Evaluation */}

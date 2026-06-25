@@ -32,23 +32,37 @@ class ModelRouter:
         self.default_provider = default_provider
         self.event_bus = event_bus
 
-    def _select(self, provider: str | None) -> LLMAdapter:
+    def _resolve(
+        self, provider: str | None, model: str | None
+    ) -> tuple[LLMAdapter, str, bool]:
+        """Return (adapter, requested_provider, downgraded_to_mock)."""
         wanted = provider or self.default_provider
-        if self.manager.available(wanted):
-            return self.manager.get(wanted)
-        # fail over to offline mock
-        return self.manager.get("mock")
+        if wanted != "mock" and not self.manager.available(wanted):
+            return self.manager.get("mock"), wanted, True
+        return self.manager.get(wanted, model), wanted, False
 
     async def complete(
         self,
         *,
         provider: str | None = None,
+        model: str | None = None,
         system: str,
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
         session_id: str | None = None,
     ) -> RouteResult:
-        adapter = self._select(provider)
+        adapter, wanted, downgraded = self._resolve(provider, model)
+        if downgraded:
+            # Never silently fake it: tell the user their model isn't connected.
+            await self.event_bus.publish(
+                EventType.PROVIDER_DOWNGRADED,
+                {
+                    "requested": wanted,
+                    "used": "mock",
+                    "reason": "not connected — connect a model on the Connections page",
+                },
+                session_id=session_id,
+            )
         try:
             response = await adapter.complete(
                 system=system, messages=messages, tools=tools

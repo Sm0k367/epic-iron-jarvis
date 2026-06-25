@@ -63,6 +63,15 @@ from .secrets import models as _sec_models  # noqa: F401
 from .webhooks import InboundWebhooks, OutboundWebhooks
 from .webhooks import models as _whk_models  # noqa: F401
 
+# Documents (all file types) + self-correcting learning loop.
+from .documents import document_tools
+from .learning import LearningEngine, learning_tools
+from .learning import models as _learn_models  # noqa: F401
+
+# LLM Connections (API key + OAuth2/PKCE).
+from .connections import ConnectionRegistry
+from .connections import models as _conn_models  # noqa: F401
+
 
 @dataclass
 class Platform:
@@ -86,6 +95,8 @@ class Platform:
     outbound_webhooks: OutboundWebhooks
     filesearch: FileSearchService
     ltm: LongTermMemory
+    learning: LearningEngine
+    connections: ConnectionRegistry
     scheduler: Scheduler | None = None
     agents_registry: DynamicAgentRegistry | None = None
 
@@ -108,7 +119,29 @@ def build_platform(
     )
 
     vault = BrowserVault(config.browser_dir)
-    providers = ProviderManager(vault=vault, default_model=config.default_model)
+
+    # Secrets vault + LLM Connections (OAuth2/PKCE + API key) — built early so the
+    # provider manager resolves live credentials and reports REAL availability.
+    secrets = SecretsManager(config.home, engine)
+    connections = ConnectionRegistry(
+        engine,
+        secrets,
+        http_factory=lambda: httpx.Client(timeout=30),
+        oauth_app=lambda provider: {
+            "client_id": secrets.get(f"{provider}_oauth_client_id"),
+            "client_secret": secrets.get(f"{provider}_oauth_client_secret"),
+            "redirect_uri": (
+                secrets.get(f"{provider}_oauth_redirect_uri")
+                or f"http://localhost:8787/oauth/{provider}/callback"
+            ),
+        },
+    )
+
+    providers = ProviderManager(
+        vault=vault,
+        default_model=config.default_model,
+        credential_resolver=connections.credential,
+    )
     router = ModelRouter(providers, config.default_provider, event_bus)
     registry = default_registry()
 
@@ -132,8 +165,7 @@ def build_platform(
 
     # --- Robust feature set ----------------------------------------------
 
-    # Shared secrets vault (API keys / OAuth / tokens) used by all subsystems.
-    secrets = SecretsManager(config.home, engine)
+    # Secrets vault (built above) — expose its agent tools.
     for tool in secret_tools(secrets):
         registry.register(tool)
 
@@ -191,6 +223,16 @@ def build_platform(
     for tool in ltm_tools(ltm):
         registry.register(tool)
 
+    # Documents: read/write PDF, Word, Excel, PowerPoint, CSV, Markdown, text.
+    for tool in document_tools():
+        registry.register(tool)
+
+    # Self-correcting learning loop: feedback + reflections become lessons that
+    # get injected into every future agent prompt (gets better each interaction).
+    learning = LearningEngine(engine)
+    for tool in learning_tools(learning):
+        registry.register(tool)
+
     permissions = PermissionEngine(config.permissions, ask_resolver=ask_resolver)
 
     platform = Platform(
@@ -214,6 +256,8 @@ def build_platform(
         outbound_webhooks=outbound_webhooks,
         filesearch=filesearch,
         ltm=ltm,
+        learning=learning,
+        connections=connections,
     )
 
     # Phase 6: the delegate tool needs the assembled platform.

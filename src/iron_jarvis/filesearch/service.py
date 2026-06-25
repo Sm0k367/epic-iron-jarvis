@@ -195,6 +195,15 @@ class FileSearchService:
                 return None
         except OSError:
             return None
+        # Office / PDF documents: extract their text so content search reaches
+        # inside PDFs, Word, Excel, and PowerPoint instead of skipping them.
+        if path.suffix.lower() in {".pdf", ".docx", ".xlsx", ".pptx"}:
+            try:
+                from ..documents import extract_text
+
+                return extract_text(path)
+            except Exception:
+                return None
         try:
             data = path.read_bytes()
         except (OSError, PermissionError, ValueError):

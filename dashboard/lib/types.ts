@@ -235,6 +235,91 @@ export interface ModelOption {
   model: string;
 }
 
+/* ---- Connections (LLM connect: API key + OAuth) -------------------------- */
+export interface Connection {
+  provider: string;
+  display_name: string;
+  method: "api_key" | "oauth" | "browser";
+  connected: boolean;
+  status: string; // "connected" | "disconnected" | "needs_auth"
+  account: string;
+  scopes: string[];
+}
+
+export interface ConnectionTestResult {
+  ok: boolean;
+  detail: string;
+}
+
+export interface OAuthStart {
+  authorization_url: string;
+  state: string;
+}
+
+/** Message the daemon's OAuth callback posts back to the dashboard window. */
+export interface OAuthMessage {
+  type: "ironjarvis-oauth";
+  provider: string;
+  ok: boolean;
+}
+
+/* ---- Onboarding / first-run / doctor ------------------------------------- */
+export interface OnboardingStep {
+  key: string; // connect_ai | first_session | work_with_document | teach_style
+  title: string;
+  detail: string;
+  done: boolean;
+  action: string;
+}
+
+export interface DoctorCheck {
+  name: string;
+  ok: boolean;
+  detail: string;
+  fix: string;
+  level?: string; // "required" | "recommended"
+}
+
+export interface Doctor {
+  ok: boolean;
+  checks: DoctorCheck[];
+}
+
+export interface Onboarding {
+  version: string;
+  first_run: boolean;
+  doctor: Doctor;
+  checklist: OnboardingStep[];
+  next_step: OnboardingStep | null;
+}
+
+/* ---- Documents ----------------------------------------------------------- */
+export interface DocumentRead {
+  path: string;
+  text: string;
+}
+
+export interface DocumentWriteResult {
+  path: string;
+  bytes: number;
+}
+
+/* ---- Learning / lessons -------------------------------------------------- */
+/** A distilled lesson the agent carries forward. `source` ∈ feedback|reflection|preference. */
+export interface Lesson {
+  text: string;
+  source: string;
+  weight: number;
+  scope: string;
+  created_at: string;
+  id?: string;
+}
+
+export interface FeedbackResult {
+  id: string;
+  rating: string;
+}
+
 /* ---- Agents -------------------------------------------------------------- */
 export interface DynamicAgent {
   name: string;

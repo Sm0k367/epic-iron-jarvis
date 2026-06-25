@@ -1,0 +1,376 @@
+"""Connection Registry — the one clean entry point for connecting LLMs.
+
+Connecting a provider must be FLAWLESS and CLEAR: pick a provider, give it an API
+key *or* run the OAuth 2.0 + PKCE flow, and it becomes "connected". Credentials
+are written **only** to the encrypted secrets vault; this registry persists just
+the connection *state* (:class:`ConnectionRecord`) and never stores or returns a
+secret value through its status/listing surfaces.
+
+The registry is transport- and config-injected so it runs fully offline in tests:
+
+* ``secrets`` — the :class:`~iron_jarvis.secrets.manager.SecretsManager` (or any
+  object exposing ``get/set/set_oauth/get_oauth/delete``).
+* ``http_factory`` — returns an HTTP client (``.post(url, data=, headers=)``) used
+  for token exchange/refresh. Defaults to a thin ``httpx.Client``.
+* ``oauth_app`` — ``oauth_app(provider) -> {client_id, client_secret, redirect_uri}``
+  resolving the registered OAuth *app* credentials (from secrets/config).
+"""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Callable
+from datetime import datetime, timedelta, timezone
+
+from sqlalchemy import Engine
+from sqlmodel import select
+
+from ..core.db import session_scope
+from ..core.ids import utcnow
+from .models import ConnectionRecord
+from .oauth import OAuthClient
+from .specs import BUILTIN_SPECS, ConnectionSpec
+
+#: ``oauth_app(provider) -> {"client_id", "client_secret", "redirect_uri"}``
+OAuthAppResolver = Callable[[str], dict]
+
+
+def _default_http_factory():
+    import httpx  # lazy: only needed for real network token exchange
+
+    return httpx.Client(timeout=30)
+
+
+def _no_oauth_app(provider: str) -> dict:
+    return {}
+
+
+class ConnectionRegistry:
+    """Connect / disconnect / test LLM providers; secrets stay in the vault."""
+
+    def __init__(
+        self,
+        engine: Engine,
+        secrets,
+        *,
+        http_factory: Callable[[], object] | None = None,
+        oauth_app: OAuthAppResolver | None = None,
+    ) -> None:
+        self.engine = engine
+        self.secrets = secrets
+        self._http_factory = http_factory or _default_http_factory
+        self._oauth_app = oauth_app or _no_oauth_app
+        self._specs: dict[str, ConnectionSpec] = dict(BUILTIN_SPECS)
+        # state -> {"verifier", "provider", "created_at"} for in-flight OAuth flows
+        self._pending: dict[str, dict] = {}
+
+    # --- specs ------------------------------------------------------------
+
+    def register(self, spec: ConnectionSpec) -> None:
+        """Register (or override) a provider spec — e.g. a generic OAuth one."""
+        self._specs[spec.provider] = spec
+
+    def specs(self) -> list[ConnectionSpec]:
+        """All known provider specs, ordered by provider id."""
+        return [self._specs[k] for k in sorted(self._specs)]
+
+    def get_spec(self, provider: str) -> ConnectionSpec | None:
+        return self._specs.get(provider)
+
+    # --- status (NEVER leaks secret values) -------------------------------
+
+    def status(self) -> list[dict]:
+        """Per-provider connection status. Carries names/scopes, never secrets."""
+        out: list[dict] = []
+        for spec in self.specs():
+            record = self._get_record(spec.provider)
+            status = record.status if record else "disconnected"
+            connected = status == "connected"
+            if record and record.scopes_json and record.scopes_json not in ("[]", ""):
+                scopes = _loads_list(record.scopes_json)
+            else:
+                scopes = list(spec.scopes)
+            out.append(
+                {
+                    "provider": spec.provider,
+                    "display_name": spec.display_name,
+                    "method": spec.method,
+                    "connected": connected,
+                    "status": status,
+                    "account": record.account if record else "",
+                    "scopes": scopes,
+                }
+            )
+        return out
+
+    # --- API key ----------------------------------------------------------
+
+    def set_api_key(self, provider: str, key: str) -> ConnectionRecord:
+        """Store an API key in the vault and mark the provider connected."""
+        spec = self._require_spec(provider)
+        if spec.method != "api_key":
+            raise ValueError(
+                f"provider '{provider}' connects via {spec.method}, not an API key"
+            )
+        secret_name = spec.key_secret_name or f"{provider}_api_key"
+        self.secrets.set(secret_name, key, kind="api_key")
+        return self._upsert(
+            provider,
+            method="api_key",
+            status="connected",
+            secret_name=secret_name,
+            connected_at=utcnow(),
+        )
+
+    # --- OAuth 2.0 + PKCE -------------------------------------------------
+
+    def start_oauth(self, provider: str) -> dict:
+        """Begin an OAuth flow: returns ``{authorization_url, state}``.
+
+        Generates a PKCE verifier/challenge + CSRF ``state``, stashes the verifier
+        keyed by ``state`` (server-side, in memory), and marks the provider as
+        ``needs_auth``. Raises if the provider is not OAuth or has no client id.
+        """
+        spec = self._require_spec(provider)
+        if spec.method != "oauth":
+            raise ValueError(f"provider '{provider}' does not use OAuth")
+        app = self._oauth_app(provider) or {}
+        client_id = app.get("client_id")
+        if not client_id:
+            raise ValueError(
+                f"no OAuth client configured for '{provider}' — set its client id"
+            )
+        verifier, challenge = OAuthClient.pkce_pair()
+        state = OAuthClient.new_state()
+        self._pending[state] = {
+            "verifier": verifier,
+            "provider": provider,
+            "created_at": utcnow(),
+        }
+        url = OAuthClient.authorization_url(
+            spec,
+            client_id=client_id,
+            redirect_uri=app.get("redirect_uri", ""),
+            state=state,
+            code_challenge=challenge,
+        )
+        self._upsert(provider, method="oauth", status="needs_auth")
+        return {"authorization_url": url, "state": state}
+
+    def complete_oauth(
+        self, provider: str, *, code: str, state: str
+    ) -> ConnectionRecord:
+        """Finish an OAuth flow: exchange ``code`` for a token, store it, connect.
+
+        Looks up the PKCE verifier by ``state`` (raising on an unknown/expired
+        state), exchanges the code at the provider's token endpoint, stores the
+        token dict in the vault, and marks the provider connected.
+        """
+        spec = self._require_spec(provider)
+        pending = self._pending.pop(state, None)
+        if pending is None or pending.get("provider") != provider:
+            raise ValueError("unknown or expired OAuth state")
+        app = self._oauth_app(provider) or {}
+        http = self._http_factory()
+        try:
+            token = OAuthClient.exchange_code(
+                spec,
+                code=code,
+                code_verifier=pending["verifier"],
+                client_id=app.get("client_id", ""),
+                client_secret=app.get("client_secret", ""),
+                redirect_uri=app.get("redirect_uri", ""),
+                http=http,
+            )
+        finally:
+            _close(http)
+
+        token = self._stamp_expiry(dict(token or {}))
+        secret_name = f"{provider}_oauth"
+        self.secrets.set_oauth(secret_name, token)
+
+        scope = token.get("scope")
+        scopes = scope.split() if isinstance(scope, str) and scope else list(spec.scopes)
+        account = token.get("account") or token.get("email") or ""
+        return self._upsert(
+            provider,
+            method="oauth",
+            status="connected",
+            secret_name=secret_name,
+            account=account,
+            scopes_json=json.dumps(scopes),
+            connected_at=utcnow(),
+        )
+
+    # --- credential resolution -------------------------------------------
+
+    def credential(self, provider: str) -> str | None:
+        """Return the usable credential: API key, or a fresh OAuth access token.
+
+        For OAuth, transparently refreshes an expired token when a
+        ``refresh_token`` is available. Returns ``None`` if nothing is stored.
+        """
+        spec = self.get_spec(provider)
+        if spec is None:
+            return None
+        if spec.method == "api_key":
+            secret_name = spec.key_secret_name or f"{provider}_api_key"
+            return self.secrets.get(secret_name)
+        if spec.method == "oauth":
+            return self._oauth_access_token(provider, spec)
+        return None
+
+    def _oauth_access_token(
+        self, provider: str, spec: ConnectionSpec
+    ) -> str | None:
+        secret_name = f"{provider}_oauth"
+        token = self.secrets.get_oauth(secret_name)
+        if not token:
+            return None
+        if _is_expired(token) and token.get("refresh_token"):
+            app = self._oauth_app(provider) or {}
+            http = self._http_factory()
+            try:
+                fresh = OAuthClient.refresh(
+                    spec,
+                    refresh_token=token["refresh_token"],
+                    client_id=app.get("client_id", ""),
+                    client_secret=app.get("client_secret", ""),
+                    http=http,
+                )
+            finally:
+                _close(http)
+            merged = {**token, **(fresh or {})}
+            # A refresh response often omits the refresh_token — keep the old one.
+            if not merged.get("refresh_token"):
+                merged["refresh_token"] = token.get("refresh_token")
+            merged = self._stamp_expiry(merged, force=True)
+            self.secrets.set_oauth(secret_name, merged)
+            token = merged
+        return token.get("access_token")
+
+    # --- test / disconnect ------------------------------------------------
+
+    def test(self, provider: str) -> dict:
+        """Probe a connection: ``{ok, detail}`` with a clear, user-facing detail."""
+        spec = self.get_spec(provider)
+        if spec is None:
+            return {"ok": False, "detail": f"unknown provider '{provider}'"}
+        if provider == "mock":
+            return {"ok": True, "detail": "mock is always connectable (offline)"}
+        record = self._get_record(provider)
+        if record is None or record.status != "connected":
+            return {
+                "ok": False,
+                "detail": (
+                    f"{spec.display_name} is not connected — "
+                    "connect it on the Connections page"
+                ),
+            }
+        if self.credential(provider):
+            return {"ok": True, "detail": f"{spec.display_name} is connected"}
+        return {
+            "ok": False,
+            "detail": (
+                f"{spec.display_name} has no stored credential — "
+                "reconnect it on the Connections page"
+            ),
+        }
+
+    def disconnect(self, provider: str) -> ConnectionRecord:
+        """Drop the stored credential and mark the provider disconnected."""
+        spec = self._require_spec(provider)
+        record = self._get_record(provider)
+        secret_name = (record.secret_name if record else "") or _default_secret_name(
+            spec
+        )
+        if secret_name:
+            self.secrets.delete(secret_name)
+        return self._upsert(
+            provider,
+            method=spec.method,
+            status="disconnected",
+            account="",
+            connected_at=None,
+        )
+
+    # --- internals --------------------------------------------------------
+
+    def _require_spec(self, provider: str) -> ConnectionSpec:
+        spec = self._specs.get(provider)
+        if spec is None:
+            raise KeyError(f"unknown provider '{provider}'")
+        return spec
+
+    def _stamp_expiry(self, token: dict, *, force: bool = False) -> dict:
+        """Record an absolute ``expires_at`` from a relative ``expires_in``."""
+        expires_in = token.get("expires_in")
+        if expires_in and (force or "expires_at" not in token):
+            token["expires_at"] = (
+                utcnow() + timedelta(seconds=int(expires_in))
+            ).isoformat()
+        return token
+
+    def _get_record(self, provider: str) -> ConnectionRecord | None:
+        with session_scope(self.engine) as db:
+            row = db.exec(
+                select(ConnectionRecord).where(ConnectionRecord.provider == provider)
+            ).first()
+            if row is not None:
+                db.expunge(row)
+            return row
+
+    def _upsert(self, provider: str, **fields) -> ConnectionRecord:
+        with session_scope(self.engine) as db:
+            row = db.exec(
+                select(ConnectionRecord).where(ConnectionRecord.provider == provider)
+            ).first()
+            if row is None:
+                row = ConnectionRecord(provider=provider)
+            for key, value in fields.items():
+                setattr(row, key, value)
+            row.updated_at = utcnow()
+            db.add(row)
+            db.commit()
+            db.refresh(row)
+            db.expunge(row)
+            return row
+
+
+# --- module helpers -------------------------------------------------------
+
+
+def _default_secret_name(spec: ConnectionSpec) -> str:
+    if spec.method == "oauth":
+        return f"{spec.provider}_oauth"
+    return spec.key_secret_name or f"{spec.provider}_api_key"
+
+
+def _loads_list(raw: str) -> list:
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return []
+    return value if isinstance(value, list) else []
+
+
+def _is_expired(token: dict) -> bool:
+    exp = token.get("expires_at")
+    if not exp:
+        return False
+    try:
+        dt = datetime.fromisoformat(exp)
+    except (TypeError, ValueError):
+        return False
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return utcnow() >= dt
+
+
+def _close(http) -> None:
+    close = getattr(http, "close", None)
+    if callable(close):
+        try:
+            close()
+        except Exception:  # closing a transport must never break the flow
+            pass

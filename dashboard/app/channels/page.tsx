@@ -88,7 +88,12 @@ export default function ChannelsPage() {
             {loading && !data ? (
               <SkeletonRows rows={3} />
             ) : channels.length === 0 ? (
-              <Empty icon={<Megaphone size={22} />}>No channels configured.</Empty>
+              <Empty
+                icon={<Megaphone size={22} />}
+                action={{ label: "Configure integrations", href: "/integrations" }}
+              >
+                No channels configured.
+              </Empty>
             ) : (
               <ul className="space-y-2">
                 {channels.map((c) => (

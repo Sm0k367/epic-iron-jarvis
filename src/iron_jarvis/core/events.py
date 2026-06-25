@@ -33,6 +33,7 @@ class EventType:
     WORKFLOW_COMPLETED = "workflow.completed"
     REVIEW_REQUESTED = "review.requested"
     PROVIDER_FAILED = "provider.failed"
+    PROVIDER_DOWNGRADED = "provider.downgraded"
 
 
 @dataclass

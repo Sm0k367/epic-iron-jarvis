@@ -379,5 +379,115 @@ def create_agent(
     console.print(f"[green]created agent[/green] {name} with tools {tools}")
 
 
+@app.command()
+def feedback(
+    session_id: str,
+    rating: str = typer.Argument(..., help="up | down | neutral"),
+    comment: str = typer.Option("", help="What to adjust."),
+    root: str = typer.Option("."),
+) -> None:
+    """Give feedback on a session — it becomes a lesson the agent applies next time."""
+    platform = build_platform(root)
+    platform.learning.record_feedback(session_id, rating, comment)
+    console.print(f"[green]thanks[/green] — recorded {rating} feedback; I'll learn from it.")
+
+
+@app.command()
+def lessons(root: str = typer.Option(".", help="Project root.")) -> None:
+    """Show what Iron Jarvis has learned about working with you."""
+    platform = build_platform(root)
+    table = Table(title="What I've learned")
+    table.add_column("source")
+    table.add_column("wt")
+    table.add_column("lesson", overflow="fold")
+    for lr in platform.learning.lessons(scope=None, limit=30):
+        table.add_row(lr.source, str(lr.weight), lr.text)
+    console.print(table)
+
+
+@app.command("doc-read")
+def doc_read(path: str, root: str = typer.Option(".")) -> None:
+    """Extract text from any document (PDF, Word, Excel, PowerPoint, CSV, MD, ...)."""
+    from ..documents import extract_text
+
+    console.print(extract_text(path)[:4000])
+
+
+@app.command()
+def doctor() -> None:
+    """Check your environment is ready to run Iron Jarvis."""
+    from ..onboarding import doctor as run_doctor
+
+    result = run_doctor()
+    table = Table(title="Iron Jarvis doctor")
+    table.add_column("")
+    table.add_column("check")
+    table.add_column("detail", overflow="fold")
+    for c in result["checks"]:
+        mark = (
+            "[green]OK[/green]"
+            if c["ok"]
+            else ("[yellow]warn[/yellow]" if c.get("level") == "recommended" else "[red]FAIL[/red]")
+        )
+        detail = c["detail"] + (f"  ->  {c['fix']}" if not c["ok"] else "")
+        table.add_row(mark, c["name"], detail)
+    console.print(table)
+    console.print(
+        "[green]All set![/green]" if result["ok"] else "[yellow]Some required checks failed.[/yellow]"
+    )
+
+
+@app.command()
+def connect(provider: str, key: str, root: str = typer.Option(".")) -> None:
+    """Connect an LLM provider with an API key (stored encrypted in the vault)."""
+    platform = build_platform(root)
+    platform.connections.set_api_key(provider, key)
+    console.print(f"[green]connected[/green] {provider} — try a session with --provider {provider}")
+
+
+@app.command()
+def up(
+    host: str = typer.Option("127.0.0.1"),
+    port: int = typer.Option(8787),
+    root: str = typer.Option("."),
+    open_browser: bool = typer.Option(True, "--open/--no-open"),
+) -> None:
+    """Start the daemon AND the dashboard with one command."""
+    import shutil
+    import subprocess
+    import webbrowser
+
+    import uvicorn
+
+    from .app import create_app
+
+    procs = []
+    dash = Path(root) / "dashboard"
+    if (dash / ".next").exists() and shutil.which("pnpm"):
+        console.print("[cyan]Dashboard[/cyan] -> http://localhost:3000")
+        procs.append(subprocess.Popen("pnpm start", cwd=str(dash), shell=True))
+        url = "http://localhost:3000"
+    else:
+        console.print(
+            "[yellow]Dashboard not built[/yellow] (cd dashboard && pnpm install && pnpm build). Serving the API only."
+        )
+        url = f"http://{host}:{port}"
+    console.print(f"[cyan]Daemon[/cyan]    -> http://{host}:{port}")
+    if open_browser:
+        try:
+            webbrowser.open(url)
+        except Exception:
+            pass
+    os.environ["IRONJARVIS_ROOT"] = str(Path(root).resolve())
+    try:
+        uvicorn.run(create_app(os.environ["IRONJARVIS_ROOT"]), host=host, port=port)
+    finally:
+        for pr in procs:
+            try:
+                pr.terminate()
+            except Exception:
+                pass
+
+
 if __name__ == "__main__":
     app()

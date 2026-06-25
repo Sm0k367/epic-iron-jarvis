@@ -4,7 +4,7 @@ import Link from "next/link";
 import { Boxes, Plus, ArrowUpRight } from "lucide-react";
 import { usePolledApi } from "@/lib/useApi";
 import type { SessionView } from "@/lib/types";
-import { Card, Badge, StatusDot, OfflineHint, Empty, SkeletonRows } from "@/components/ui";
+import { Card, Badge, StatusDot, OfflineHint, Empty, MockChip, SkeletonRows } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { NewSessionForm } from "@/components/NewSessionForm";
 import { PageShell, Reveal } from "@/components/motion";
@@ -81,8 +81,11 @@ export default function SessionsPage() {
                                 className="shrink-0 text-zinc-600 opacity-0 transition-opacity group-hover:opacity-100"
                               />
                             </Link>
-                            <span className="pl-4 font-mono text-[11px] text-zinc-600">
-                              {shortId(s.id)}
+                            <span className="flex items-center gap-2 pl-4">
+                              <span className="font-mono text-[11px] text-zinc-600">
+                                {shortId(s.id)}
+                              </span>
+                              {s.provider === "mock" && <MockChip />}
                             </span>
                           </td>
                           <td className="px-2 py-2.5 text-zinc-400">{s.agent_type}</td>

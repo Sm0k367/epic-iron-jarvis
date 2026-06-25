@@ -16,16 +16,37 @@ from .base import LLMAdapter, LLMMessage, LLMResponse, ToolCall
 class AnthropicAdapter(LLMAdapter):
     provider = "anthropic"
 
-    def __init__(self, model: str = "claude-opus-4-8", max_tokens: int = 4096) -> None:
+    def __init__(
+        self,
+        model: str = "claude-opus-4-8",
+        max_tokens: int = 4096,
+        *,
+        api_key: str | None = None,
+        credential=None,
+    ) -> None:
         self.model = model
         self.max_tokens = max_tokens
+        self._api_key = api_key
+        self._credential = credential  # Callable[[], str | None] | None
+
+    def _key(self) -> str | None:
+        if self._api_key:
+            return self._api_key
+        if self._credential is not None:
+            key = self._credential()
+            if key:
+                return key
+        return os.environ.get("ANTHROPIC_API_KEY")
 
     def _client(self):
-        if not os.environ.get("ANTHROPIC_API_KEY"):
-            raise RuntimeError("ANTHROPIC_API_KEY is not set")
+        key = self._key()
+        if not key:
+            raise RuntimeError(
+                "No Anthropic credential — connect it on the Connections page."
+            )
         from anthropic import AsyncAnthropic  # lazy import
 
-        return AsyncAnthropic()
+        return AsyncAnthropic(api_key=key)
 
     @staticmethod
     def _to_anthropic_messages(messages: list[LLMMessage]) -> list[dict[str, Any]]:

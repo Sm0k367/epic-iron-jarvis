@@ -48,7 +48,10 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | 📅 **Scheduled tasks** | friendly repeat presets or a specific date/time — no cron syntax required |
 | 🔭 **Observability** | live event stream, traces, per-run evaluation metrics |
 | 🖥️ **Beautiful dashboard** | arc-reactor dark UI, Kanban board, real-time everything |
-| ✅ **200+ offline tests** | the whole platform runs green with no network and no API keys |
+| 📄 **Every file type** | read & write **PDF, Word, Excel, PowerPoint, CSV, Markdown, text** — like a colleague would |
+| 🌱 **Self-correcting** | feedback → lessons injected into every future run; it gets **better each time** you use it |
+| 🔌 **Connect a model in seconds** | a Connections page with API-key or **OAuth 2.0 (PKCE)** sign-in — paste a key or click Connect |
+| ✅ **254 offline tests** | the whole platform runs green with no network and no API keys |
 
 <div align="center">
 
@@ -63,26 +66,26 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 ## 🚀 Quickstart
 
 ```bash
-# 1. Backend (Python 3.12+, uv)
+# 0. Check your machine is ready (Python/uv/Node/pnpm/git/browser)
+uv run ironjarvis doctor
+
+# 1. Install + (optional) try it offline, no keys
 uv sync --extra dev
-uv run ironjarvis demo        # offline end-to-end across every subsystem, no network
+uv run ironjarvis demo        # offline end-to-end across every subsystem
 uv run pytest -q              # the full offline test suite, all green
 
-# 2. Daemon (the brain — FastAPI + WebSocket on :8787)
-uv run ironjarvis serve
-
-# 3. Dashboard (the cockpit — Next.js on :3000)
-cd dashboard
-pnpm install                  # .npmrc pins node-linker=hoisted (App Router prod fix)
-pnpm build && pnpm start      # open http://localhost:3000
+# 2. ONE command to run everything (daemon :8787 + dashboard :3000, opens your browser)
+uv run ironjarvis up
 ```
+
+First time only, build the dashboard once: `cd dashboard && pnpm install && pnpm build`. After that, `ironjarvis up` launches both. Prefer two terminals? `uv run ironjarvis serve` + `cd dashboard && pnpm start`.
 
 That's it. Open the dashboard, hit **New Session**, and watch agents work in real time.
 
-**Want the real model?** Drop your key in the vault and point a session at it:
+**Connect a real model** — flawless and clear, right in the dashboard's **Connections** page (paste an API key or **Connect with OAuth**), or from the CLI:
 ```bash
-uv run ironjarvis secret-set anthropic_api_key sk-ant-...
-# sessions/agents can now route to anthropic · claude-opus-4-8
+uv run ironjarvis connect anthropic sk-ant-...   # stored encrypted in the vault
+# the provider flips to "available" instantly — sessions route to it, no env vars
 ```
 
 ---
@@ -185,7 +188,7 @@ Built from `SPEC.MD` (§10–33) + reconstructed `SPEC-SECTIONS-01-09.md`. See `
 
 ## ✅ Proof it works
 
-- **200+ offline tests pass** (`uv run pytest -q`) — no network, no keys.
+- **254 offline tests pass** (`uv run pytest -q`) — no network, no keys.
 - Live daemon serves every endpoint; the dashboard has a clean production build.
 - Real-Chrome screenshots of every page live in [`dashboard/proof/`](dashboard/proof/).
 

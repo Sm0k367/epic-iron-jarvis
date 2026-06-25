@@ -1,6 +1,7 @@
 "use client";
 
 import type { ReactNode } from "react";
+import Link from "next/link";
 import {
   CircleCheck,
   CircleX,
@@ -9,6 +10,8 @@ import {
   LoaderCircle,
   TriangleAlert,
   ServerCrash,
+  ArrowRight,
+  MoonStar,
 } from "lucide-react";
 
 /* -------------------------------------------------------------------------- */
@@ -249,15 +252,38 @@ export function SkeletonRows({ rows = 4 }: { rows?: number }) {
 export function Empty({
   children,
   icon,
+  action,
 }: {
   children: ReactNode;
   icon?: ReactNode;
+  /** Optional call-to-action link shown beneath the message. */
+  action?: { label: string; href: string };
 }) {
   return (
-    <div className="flex flex-col items-center justify-center gap-2 py-10 text-center">
+    <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
       {icon && <div className="text-zinc-600">{icon}</div>}
       <div className="max-w-sm text-sm text-zinc-500">{children}</div>
+      {action && (
+        <Link
+          href={action.href}
+          className="inline-flex items-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-1.5 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]"
+        >
+          {action.label} <ArrowRight size={13} />
+        </Link>
+      )}
     </div>
+  );
+}
+
+/** A small amber chip marking sessions that ran on the built-in offline model. */
+export function MockChip({ className = "" }: { className?: string }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-full border border-amber-500/25 bg-amber-500/[0.1] px-2 py-0.5 text-[10px] font-medium text-amber-300 ${className}`}
+      title="Ran on the built-in offline mock model"
+    >
+      <MoonStar size={10} /> offline mock
+    </span>
   );
 }
 

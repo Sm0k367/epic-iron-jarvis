@@ -17,6 +17,7 @@ from typing import Any
 import httpx
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 from sqlmodel import select
 
@@ -36,7 +37,12 @@ class SessionCreate(BaseModel):
     task: str
     agent_type: str = "builder"
     provider: str | None = None
+    model: str | None = None
     wait: bool = True
+
+
+class ConnectionKeyBody(BaseModel):
+    key: str
 
 
 class MemoryWrite(BaseModel):
@@ -56,6 +62,17 @@ class WorkflowSaveBody(BaseModel):
     name: str
     steps: list[dict] = []
     description: str = ""
+
+
+class FeedbackBody(BaseModel):
+    rating: str = "up"  # up | down | neutral
+    comment: str = ""
+
+
+class DocWriteBody(BaseModel):
+    path: str
+    content: str
+    kind: str | None = None
 
 
 class SecretSet(BaseModel):
@@ -202,7 +219,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     @app.post("/sessions")
     async def create_session(body: SessionCreate) -> dict[str, Any]:
         session = await orchestrator.create_session(
-            body.task, _agent_type(body.agent_type), body.provider
+            body.task, _agent_type(body.agent_type), body.provider, model=body.model
         )
         if body.wait:
             session = await orchestrator.run_session(session.id)
@@ -245,6 +262,47 @@ def create_app(project_root: str | None = None) -> FastAPI:
         if ev is None:
             raise HTTPException(status_code=404, detail="no evaluation")
         return ev.model_dump()
+
+    # --- Self-correcting learning loop ------------------------------------
+
+    @app.post("/sessions/{session_id}/feedback")
+    def session_feedback(session_id: str, body: FeedbackBody) -> dict[str, Any]:
+        fb = platform.learning.record_feedback(session_id, body.rating, body.comment)
+        return {"id": fb.id, "rating": fb.rating}
+
+    @app.get("/lessons")
+    def lessons(scope: str | None = "user", limit: int = 20) -> dict[str, Any]:
+        return {
+            "lessons": [
+                lr.model_dump() for lr in platform.learning.lessons(scope=scope, limit=limit)
+            ]
+        }
+
+    # --- Documents (all file types) ---------------------------------------
+
+    @app.get("/documents/read")
+    def documents_read(path: str) -> dict[str, Any]:
+        from ..documents import extract_text
+
+        try:
+            text = extract_text(path)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"cannot read: {exc}")
+        return {"path": path, "text": text[:20000]}
+
+    @app.post("/documents/write")
+    def documents_write(body: DocWriteBody) -> dict[str, Any]:
+        from ..documents import write_document
+
+        base = (platform.config.home / "documents").resolve()
+        target = (base / body.path).resolve()
+        if target != base and not target.is_relative_to(base):
+            raise HTTPException(status_code=400, detail="path escapes documents dir")
+        out = write_document(target, body.content, kind=body.kind)
+        return {
+            "path": str(out.relative_to(base)).replace("\\", "/"),
+            "bytes": out.stat().st_size,
+        }
 
     # --- Memory (§21, §22) ------------------------------------------------
 
@@ -321,6 +379,70 @@ def create_app(project_root: str | None = None) -> FastAPI:
     @app.get("/vault")
     def vault() -> dict[str, Any]:
         return {"providers": platform.vault.providers()}
+
+    # --- LLM Connections (API key + OAuth2/PKCE) --------------------------
+
+    @app.get("/connections")
+    def connections() -> dict[str, Any]:
+        return {"connections": platform.connections.status()}
+
+    @app.post("/connections/{provider}/key")
+    def connect_key(provider: str, body: ConnectionKeyBody) -> dict[str, Any]:
+        try:
+            rec = platform.connections.set_api_key(provider, body.key)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"provider": rec.provider, "status": rec.status}
+
+    @app.post("/connections/{provider}/test")
+    def connect_test(provider: str) -> dict[str, Any]:
+        return platform.connections.test(provider)
+
+    @app.delete("/connections/{provider}")
+    def connect_disconnect(provider: str) -> dict[str, Any]:
+        platform.connections.disconnect(provider)
+        return {"provider": provider, "status": "disconnected"}
+
+    @app.get("/oauth/{provider}/start")
+    def oauth_start(provider: str) -> dict[str, Any]:
+        try:
+            return platform.connections.start_oauth(provider)
+        except (KeyError, ValueError) as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+
+    @app.get("/oauth/{provider}/callback")
+    def oauth_callback(provider: str, code: str = "", state: str = "") -> HTMLResponse:
+        try:
+            platform.connections.complete_oauth(provider, code=code, state=state)
+            msg, ok = f"Connected to {provider}. You can close this window.", True
+        except Exception as exc:  # noqa: BLE001
+            msg, ok = f"Connection failed: {exc}", False
+        color = "#22d3ee" if ok else "#fb7185"
+        html = (
+            "<!doctype html><meta charset=utf-8><title>Iron Jarvis</title>"
+            "<body style='background:#0a0a0f;color:#e5e7eb;font-family:system-ui;"
+            "display:grid;place-items:center;height:100vh;margin:0'>"
+            f"<div style='text-align:center'><div style='font-size:42px;color:{color}'>"
+            f"{'✓' if ok else '✕'}</div><p>{msg}</p></div>"
+            "<script>try{window.opener&&window.opener.postMessage("
+            f"{{'type':'ironjarvis-oauth','provider':'{provider}','ok':{str(ok).lower()}}},'*');"
+            "setTimeout(()=>window.close(),1200)}catch(e){}</script></body>"
+        )
+        return HTMLResponse(html)
+
+    # --- Onboarding / first-run / doctor ----------------------------------
+
+    @app.get("/onboarding")
+    def onboarding() -> dict[str, Any]:
+        from ..onboarding import readiness
+
+        return readiness(platform)
+
+    @app.get("/doctor")
+    def doctor_ep() -> dict[str, Any]:
+        from ..onboarding import doctor
+
+        return doctor()
 
     # --- Workflows (§24, §25) ---------------------------------------------
 
