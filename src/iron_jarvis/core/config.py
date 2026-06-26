@@ -24,10 +24,10 @@ def default_permissions() -> dict[str, str]:
         "edit_file": "allow",
         "list_files": "allow",
         "grep": "allow",
-        "search_codebase": "allow",
+        "search_codebase": "deny",  # no tool yet — fail-closed (use grep/file_search)
         "shell": "ask",
-        "git_status": "allow",
-        "git_diff": "allow",
+        "git_status": "deny",  # no agent git tool yet — fail-closed
+        "git_diff": "deny",
         "git_commit": "ask",
         "memory_read": "allow",
         "memory_write": "allow",
@@ -38,9 +38,9 @@ def default_permissions() -> dict[str, str]:
         "web_search": "ask",
         "browser_use": "deny",  # computer-control capability — never default-allow
         "mcp_call": "ask",
-        "create_document": "allow",
+        "create_document": "deny",  # superseded by write_document — fail-closed
         "extract_pdf": "allow",
-        "image_analysis": "allow",
+        "image_analysis": "deny",  # no tool yet — fail-closed
         "delete_file": "ask",
         "internet": "ask",
         # Robust feature set: reads are allowed; actions/secret-writes ask.

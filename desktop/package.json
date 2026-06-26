@@ -1,0 +1,49 @@
+{
+  "name": "iron-jarvis-desktop",
+  "productName": "Iron Jarvis",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Native desktop wrapper for Iron Jarvis. Boots the local Python daemon (uv run ironjarvis serve) and the Next.js dashboard (pnpm start), then opens them in a native window.",
+  "main": "main.js",
+  "author": "RealDealCPA",
+  "license": "UNLICENSED",
+  "scripts": {
+    "start": "electron .",
+    "dev": "electron .",
+    "dist": "electron-builder --win"
+  },
+  "devDependencies": {
+    "electron": "^31.7.7",
+    "electron-builder": "^25.1.8"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "electron-builder",
+      "esbuild"
+    ]
+  },
+  "build": {
+    "appId": "com.realdealcpa.ironjarvis",
+    "productName": "Iron Jarvis",
+    "//note": "DEV WRAPPER: this packaged app still expects the Iron Jarvis repo (the Python daemon + the ./dashboard) to live one directory ABOVE the app (path.join(__dirname,'..')). It launches `uv run ironjarvis serve` and `pnpm start` from there. A fully self-contained installer that bundles Python + a prebuilt dashboard is a future step (see README).",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "loading.html",
+      "assets/**"
+    ],
+    "extraResources": [],
+    "win": {
+      "target": "nsis",
+      "icon": "assets/icon.png"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
+  }
+}

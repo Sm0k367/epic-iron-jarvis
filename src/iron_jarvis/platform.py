@@ -84,6 +84,9 @@ from .computeruse import (
 )
 from .computeruse import models as _cu_models  # noqa: F401
 
+# Terminals (multi-session PTY manager for the dashboard).
+from .terminals import TerminalManager
+
 
 @dataclass
 class Platform:
@@ -110,6 +113,7 @@ class Platform:
     learning: LearningEngine
     connections: ConnectionRegistry
     computeruse: CUContext
+    terminals: TerminalManager
     scheduler: Scheduler | None = None
     agents_registry: DynamicAgentRegistry | None = None
 
@@ -189,6 +193,9 @@ def build_platform(
     )
     for tool in computeruse_tools(computeruse):
         registry.register(tool)
+
+    # Terminals: multiple live shell sessions the dashboard can attach to.
+    terminals = TerminalManager()
 
     # --- Robust feature set ----------------------------------------------
 
@@ -286,6 +293,7 @@ def build_platform(
         learning=learning,
         connections=connections,
         computeruse=computeruse,
+        terminals=terminals,
     )
 
     # Phase 6: the delegate tool needs the assembled platform.

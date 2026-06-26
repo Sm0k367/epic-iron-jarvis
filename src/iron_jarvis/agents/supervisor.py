@@ -11,7 +11,7 @@ from __future__ import annotations
 from ..core.models import AgentRun, AgentType
 from .delegate_tool import DelegateTool
 from .runtime import AgentRuntime
-from .types import AgentDefinition
+from .types import AgentDefinition, get_agent_definition
 
 SUPERVISOR_DEFINITION = AgentDefinition(
     type=AgentType.SUPERVISOR,
@@ -38,4 +38,8 @@ async def run_supervised(platform, session) -> AgentRun:
     """
     if platform.registry.get("delegate") is None:
         platform.registry.register(DelegateTool(platform))
-    return await AgentRuntime(platform).run(session, SUPERVISOR_DEFINITION)
+    # Single source of truth: the canonical SUPERVISOR definition in types.py
+    # (so behavior is identical whether launched here or via /agents/{name}/spawn).
+    return await AgentRuntime(platform).run(
+        session, get_agent_definition(AgentType.SUPERVISOR)
+    )

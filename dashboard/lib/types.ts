@@ -197,6 +197,43 @@ export interface Drive {
   label: string;
 }
 
+/* ---- Terminals (live shell sessions) ------------------------------------- */
+/** A live terminal session as reported by the daemon (`session.info()`). */
+export interface TerminalInfo {
+  id: string;
+  cwd: string;
+  shell: string;
+  argv: string[];
+  cols: number;
+  rows: number;
+  alive: boolean;
+  exit_code: number | null;
+  created_at: string;
+}
+
+/** A shell available on the host (`GET /terminals/shells`). */
+export interface Shell {
+  name: string;
+  argv: string[];
+}
+
+/* ---- Filesystem directory browser (terminals tree panel) ----------------- */
+/** A single directory child surfaced by the on-demand tree lister. */
+export interface FsEntry {
+  name: string;
+  path: string; // absolute
+  is_dir: boolean;
+  is_project: string | null; // project type ("git"|"python"|"node"|…) when a project root
+  size: number | null; // byte size for files; null for directories
+}
+
+/** One level of a directory listing (`GET /fs/list`). */
+export interface FsListing {
+  path: string;
+  parent: string | null;
+  entries: FsEntry[];
+}
+
 /* ---- Schedules ----------------------------------------------------------- */
 export interface Schedule {
   name: string;

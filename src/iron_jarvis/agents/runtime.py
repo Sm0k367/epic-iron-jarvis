@@ -73,15 +73,22 @@ class AgentRuntime:
         tool_specs = self.p.registry.specs(agent_def.tools)
         final_text = ""
 
+        system_prompt = agent_def.system_prompt
+        # Auto-inject any configured default skills (§23) into the prompt.
+        default_skills = getattr(self.p.config, "default_skills", None)
+        if default_skills:
+            try:
+                system_prompt = self.p.skills.inject(system_prompt, default_skills)
+            except Exception:
+                pass
         # Self-correction: fold accumulated lessons + user preferences into the
         # system prompt so every run is a little smarter than the last.
-        system_prompt = agent_def.system_prompt
         learning = getattr(self.p, "learning", None)
         if learning is not None:
             try:
-                system_prompt = learning.apply_to_prompt(agent_def.system_prompt)
+                system_prompt = learning.apply_to_prompt(system_prompt)
             except Exception:  # never block a run on the learning layer
-                system_prompt = agent_def.system_prompt
+                pass
 
         for step in range(self.p.config.max_agent_steps):
             route = await self.p.router.complete(

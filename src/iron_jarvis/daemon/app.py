@@ -51,6 +51,13 @@ class ComputerUseEnable(BaseModel):
     action_allowlist: list[str] | None = None
 
 
+class TerminalCreate(BaseModel):
+    cwd: str | None = None
+    shell: str | None = None
+    cols: int = 80
+    rows: int = 24
+
+
 class MemoryWrite(BaseModel):
     layer: str = "project"
     key: str
@@ -210,6 +217,10 @@ def create_app(project_root: str | None = None) -> FastAPI:
         finally:
             try:
                 platform.scheduler.shutdown()
+            except Exception:  # pragma: no cover
+                pass
+            try:
+                platform.terminals.kill_all()
             except Exception:  # pragma: no cover
                 pass
 
@@ -546,6 +557,108 @@ def create_app(project_root: str | None = None) -> FastAPI:
         if run is None:
             raise HTTPException(status_code=404, detail="no such run")
         return run.model_dump()
+
+    # --- Terminals (multiple live shell sessions) -------------------------
+
+    @app.get("/terminals")
+    def list_terminals() -> dict[str, Any]:
+        return {"terminals": platform.terminals.list()}
+
+    @app.get("/terminals/shells")
+    def terminal_shells() -> dict[str, Any]:
+        from ..terminals import available_shells
+
+        return {"shells": available_shells()}
+
+    @app.post("/terminals")
+    def create_terminal(body: TerminalCreate) -> dict[str, Any]:
+        try:
+            session = platform.terminals.create(
+                cwd=body.cwd, shell=body.shell, cols=body.cols, rows=body.rows
+            )
+        except RuntimeError as exc:  # session cap reached
+            raise HTTPException(status_code=429, detail=str(exc))
+        return session.info()
+
+    @app.delete("/terminals/{term_id}")
+    def kill_terminal(term_id: str) -> dict[str, Any]:
+        return {"killed": platform.terminals.kill(term_id)}
+
+    @app.websocket("/terminals/{term_id}/ws")
+    async def terminal_ws(ws: WebSocket, term_id: str) -> None:
+        token = os.environ.get("IRONJARVIS_TOKEN", "").strip()
+        if token and ws.query_params.get("token") != token:
+            await ws.close(code=1008)
+            return
+        session = platform.terminals.get(term_id)
+        if session is None:
+            await ws.close(code=1008)
+            return
+        await ws.accept()
+
+        async def pump_output() -> None:  # PTY -> client
+            while True:
+                data = session.read()
+                if data:
+                    await ws.send_bytes(data)
+                elif not session.alive:
+                    break
+                else:
+                    await asyncio.sleep(0.02)
+
+        out = asyncio.create_task(pump_output())
+        try:
+            while True:
+                msg = await ws.receive()
+                if msg["type"] == "websocket.disconnect":
+                    break
+                text = msg.get("text")
+                if text is not None:
+                    try:
+                        obj = json.loads(text)
+                    except (ValueError, TypeError):
+                        obj = None
+                    if isinstance(obj, dict) and obj.get("type") == "resize":
+                        session.resize(int(obj["cols"]), int(obj["rows"]))
+                    else:
+                        session.write(text)
+                elif msg.get("bytes") is not None:
+                    session.write(msg["bytes"])
+        except WebSocketDisconnect:
+            pass
+        finally:
+            out.cancel()
+            try:
+                await ws.close()
+            except Exception:
+                pass
+
+    # --- Filesystem tree (directory browser for the terminals panel) ------
+
+    @app.get("/fs/drives")
+    def fs_drives() -> dict[str, Any]:
+        from ..fsbrowser import drives
+
+        return {"drives": drives()}
+
+    @app.get("/fs/home")
+    def fs_home() -> dict[str, Any]:
+        from ..fsbrowser import home
+
+        return {"home": home()}
+
+    @app.get("/fs/list")
+    def fs_list(
+        path: str, show_hidden: bool = False, dirs_only: bool = False
+    ) -> dict[str, Any]:
+        from ..fsbrowser import list_dir
+
+        if not _fs_path_allowed(path):
+            raise HTTPException(status_code=403, detail="path not in IRONJARVIS_FS_ALLOWLIST")
+        try:
+            return list_dir(path, show_hidden=show_hidden, dirs_only=dirs_only)
+        except (FileNotFoundError, NotADirectoryError) as exc:
+            raise HTTPException(status_code=404, detail=str(exc))
 
     # --- Workflows (§24, §25) ---------------------------------------------
 

@@ -21,8 +21,8 @@ class ScheduleCreateTool(Tool):
         "Create a persistent scheduled task. Supply exactly one trigger: `cron` "
         "(a 5-field crontab string), `run_at` (an ISO-8601 datetime for a "
         "one-time fire), or `interval_seconds` (a fixed repeat period). `kind` is "
-        "'workflow' (default — `payload` is a workflow definition), 'event' "
-        "(`payload` carries the event to publish), or 'callback'. Returns the "
+        "'workflow' (default — `payload` is a workflow definition) or 'event' "
+        "(`payload` carries the event to publish). Returns the "
         "created task name and its next run time."
     )
     permission_key = "schedule_create"
@@ -33,7 +33,7 @@ class ScheduleCreateTool(Tool):
             "cron": {"type": "string"},
             "run_at": {"type": "string"},
             "interval_seconds": {"type": "integer", "minimum": 1},
-            "kind": {"type": "string", "enum": ["workflow", "event", "callback"]},
+            "kind": {"type": "string", "enum": ["workflow", "event"]},
             "payload": {"type": "object"},
         },
         "required": ["name"],

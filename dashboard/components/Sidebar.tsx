@@ -23,6 +23,7 @@ import {
   Megaphone,
   Webhook,
   MonitorCog,
+  SquareTerminal,
   MoveUpRight,
   type LucideIcon,
 } from "lucide-react";
@@ -42,6 +43,7 @@ const NAV: NavItem[] = [
   { href: "/kanban", label: "Kanban", icon: SquareKanban },
   { href: "/agents", label: "Agents", icon: Bot },
   { href: "/computeruse", label: "Computer Use", icon: MonitorCog },
+  { href: "/terminals", label: "Terminals", icon: SquareTerminal },
   { href: "/workflows", label: "Workflows", icon: Workflow },
   { href: "/schedules", label: "Schedules", icon: CalendarClock },
   { href: "/skills", label: "Skills", icon: Sparkles },

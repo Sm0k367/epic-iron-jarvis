@@ -16,8 +16,9 @@ from sqlmodel import Field, SQLModel
 
 from ..core.ids import new_id, utcnow
 
-# The action kinds a scheduled task may carry.
-KINDS: tuple[str, ...] = ("workflow", "event", "callback")
+# The action kinds a scheduled task may carry. ('callback' was removed: the run
+# dispatcher only handles workflow/event, so it would have been a silent no-op.)
+KINDS: tuple[str, ...] = ("workflow", "event")
 
 # The trigger kinds a scheduled task may fire on.
 TRIGGER_TYPES: tuple[str, ...] = ("cron", "date", "interval")
@@ -37,7 +38,7 @@ class ScheduledTaskRecord(SQLModel, table=True):
     trigger_type: str = "cron"  # cron | date | interval
     run_at: datetime | None = None  # one-time fire time (date trigger)
     interval_seconds: int | None = None  # repeat period (interval trigger)
-    kind: str = "workflow"  # workflow | event | callback
+    kind: str = "workflow"  # workflow | event
     payload_json: str = "{}"
     enabled: bool = True
     last_run: datetime | None = None

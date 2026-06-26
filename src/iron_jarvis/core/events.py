@@ -34,6 +34,9 @@ class EventType:
     REVIEW_REQUESTED = "review.requested"
     PROVIDER_FAILED = "provider.failed"
     PROVIDER_DOWNGRADED = "provider.downgraded"
+    WEBHOOK_RECEIVED = "webhook.received"
+    SCHEDULE_FIRED = "schedule.fired"
+    COMPUTERUSE_RUN_FINISHED = "computeruse.run_finished"
 
 
 @dataclass

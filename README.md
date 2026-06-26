@@ -51,7 +51,10 @@ You've used AI chat. This is the next thing: **AI that does the work and shows y
 | 📄 **Every file type** | read & write **PDF, Word, Excel, PowerPoint, CSV, Markdown, text** — like a colleague would |
 | 🌱 **Self-correcting** | feedback → lessons injected into every future run; it gets **better each time** you use it |
 | 🔌 **Connect a model in seconds** | a Connections page with API-key or **OAuth 2.0 (PKCE)** sign-in — paste a key or click Connect |
-| ✅ **254 offline tests** | the whole platform runs green with no network and no API keys |
+| 🖥️ **Multi-terminal workspace** | tiled live terminals with a **+ tile** to add more + a **directory tree** to pick a project per terminal |
+| 🪟 **Runs as a desktop app** | an Electron wrapper opens the whole thing in a native window |
+| 🤖 **Opt-in computer use** | gated, DOM-first browser automation with human-approval for risky actions |
+| ✅ **312 offline tests** | the whole platform runs green with no network and no API keys |
 
 <div align="center">
 
@@ -105,6 +108,16 @@ docker compose up        # daemon + dashboard, locally or on any Docker host
 ---
 
 ## 📖 Using Iron Jarvis — a practical guide
+
+### Run it as a desktop app 🪟
+Prefer a native window over a browser tab? An Electron wrapper boots the daemon + dashboard and shows them in one app:
+```bash
+cd dashboard && pnpm install && pnpm build   # once
+cd ../desktop  && pnpm install && pnpm start  # opens Iron Jarvis in a native window
+```
+
+### Manage multiple terminals (and pick a project) 🖥️
+**Dashboard → Terminals.** A tiled workspace of **live terminal sessions** — click the **`+` tile** to open another, so you can run/watch several agents or shells side by side. The **directory tree on the right** browses your computer (drives → folders, with git/python/node project badges); pick a folder and hit **"Open terminal here →"** to launch a terminal already `cd`'d into that project. Real PTYs (ConPTY on Windows), streamed over WebSocket.
 
 ### Run a session (and dictate it 🎙️)
 **Dashboard → Sessions → New session.** Type a task, or **click the mic and speak it** — your words transcribe straight into the prompt. Pick an agent type (`builder`, `supervisor`, …) and a provider, then **Run**. Watch the transcript, tool calls, and live events stream in. Or from the terminal:
@@ -202,7 +215,7 @@ Built from `SPEC.MD` (§10–33) + reconstructed `SPEC-SECTIONS-01-09.md`. See `
 
 ## ✅ Proof it works
 
-- **254 offline tests pass** (`uv run pytest -q`) — no network, no keys.
+- **312 offline tests pass** (`uv run pytest -q`) — no network, no keys.
 - Live daemon serves every endpoint; the dashboard has a clean production build.
 - Real-Chrome screenshots of every page live in [`dashboard/proof/`](dashboard/proof/).
 
