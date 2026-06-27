@@ -58,7 +58,8 @@ from .ltm import (
     ltm_tools,
 )
 from .ltm import sources as _ltm_sources  # noqa: F401  (registers LTMSourceRecord)
-from .memory.embeddings import MockEmbedder
+from .memory.embeddings import build_embedder
+from .memory.recall import recall_tools
 from .scheduling import Scheduler
 from .scheduling import models as _sched_models  # noqa: F401
 from .secrets import SecretsManager, secret_tools
@@ -228,8 +229,12 @@ def build_platform(
     for tool in integration_tools(integrations, secrets.get):
         registry.register(tool)
 
-    # File search across configured roots (shared offline embedder).
-    embedder = MockEmbedder()
+    # File search across configured roots. The embedder is chosen ONCE here and
+    # shared by filesearch + ltm: a real local model (Ollama) when one is
+    # reachable, else the deterministic offline MockEmbedder. Wrapping it in the
+    # persistent embedding cache (engine) makes re-indexing incremental and
+    # survive restarts (§22 Total Recall).
+    embedder = build_embedder(config, engine)
     search_roots = [Path(r) for r in config.search_roots] or [config.project_root]
     filesearch = FileSearchService(search_roots, embedder=embedder)
     for tool in filesearch_tools(filesearch):
@@ -281,6 +286,11 @@ def build_platform(
         http_factory=lambda: httpx.Client(timeout=30),
     )
     for tool in ltm_tools(ltm):
+        registry.register(tool)
+
+    # Total Recall: one semantic "remember anything" tool over the SAME embedder,
+    # spanning the indexed file roots + long-term memory.
+    for tool in recall_tools(filesearch, ltm):
         registry.register(tool)
 
     # Documents: read/write PDF, Word, Excel, PowerPoint, CSV, Markdown, text.

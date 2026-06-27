@@ -44,7 +44,9 @@ class LTMSearchTool(Tool):
         source = args.get("source")
         try:
             hits = self.manager.search(args["query"], k=k, source=source)
-        except ValueError as exc:
+        except Exception as exc:  # incl. a real embedder failing on a named source
+            # Never raise into the agent loop: a flaky embedder / store degrades
+            # to "no results", it does not crash the session.
             return ToolResult(ok=False, error=str(exc))
         output = "\n".join(
             f"[{h['source']}] {h['title']}: {h['snippet']}" for h in hits

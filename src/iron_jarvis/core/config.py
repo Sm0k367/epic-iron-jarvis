@@ -50,6 +50,7 @@ def default_permissions() -> dict[str, str]:
         "integration_test": "ask",
         "notify": "ask",
         "file_search": "allow",
+        "recall": "allow",  # semantic recall across indexed roots + long-term memory
         "ltm_search": "allow",
         "ltm_append": "allow",
         "list_agents": "allow",
@@ -136,6 +137,12 @@ class Config(BaseModel):
     event_retention_days: int = 0  # 0 = keep forever; >0 prunes old events on boot
     ollama_base_url: str | None = None  # local OpenAI-compatible (Ollama) endpoint URL
     ollama_model: str = "llama3.1"  # default model for the local "ollama" provider
+    # Embeddings (§22 Total Recall): pick a real local embedder when one is
+    # reachable, else the offline MockEmbedder. "auto" probes Ollama once and
+    # falls back silently; "ollama" forces the real path (still safe-fallback if
+    # unreachable); "mock" pins the deterministic offline embedder.
+    embedder_provider: str = "auto"  # "auto" | "ollama" | "mock"
+    embedder_model: str = "nomic-embed-text"  # local embedding model (Ollama)
 
     @property
     def db_path(self) -> Path:
