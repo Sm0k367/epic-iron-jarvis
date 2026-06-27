@@ -195,6 +195,14 @@ class AgentCreate(BaseModel):
     model: str = ""
 
 
+class CustomToolCreate(BaseModel):
+    name: str
+    description: str = ""
+    parameters: list[dict] = []
+    command: list[str] = []
+    timeout_seconds: int = 60
+
+
 class WebhookCreate(BaseModel):
     slug: str
     direction: str = "inbound"  # inbound | outbound
@@ -1416,6 +1424,60 @@ def create_app(project_root: str | None = None) -> FastAPI:
             model=body.model,
         )
         return {"name": rec.name, "provider": rec.provider, "model": rec.model}
+
+    # Custom (agent/user-authored) reusable tools.
+    @app.get("/tools/custom")
+    def list_custom_tools() -> dict[str, Any]:
+        import json as _json
+
+        def _load(s: str):
+            try:
+                return _json.loads(s or "[]")
+            except (TypeError, ValueError):
+                return []
+
+        return {
+            "tools": [
+                {
+                    "name": r.name,
+                    "description": r.description,
+                    "parameters": _load(r.params_json),
+                    "command": _load(r.argv_json),
+                    "timeout_seconds": r.timeout_seconds,
+                    "created_by": r.created_by,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                }
+                for r in platform.tools_registry.list()
+            ]
+        }
+
+    @app.post("/tools/custom")
+    def create_custom_tool(body: CustomToolCreate) -> dict[str, Any]:
+        import re as _re
+
+        name = (body.name or "").strip()
+        if not _re.match(r"^[a-zA-Z][a-zA-Z0-9_]{0,63}$", name):
+            raise HTTPException(status_code=400, detail="invalid tool name")
+        if platform.registry.get(name) is not None and name not in set(
+            platform.registry.custom_names()
+        ):
+            raise HTTPException(status_code=400, detail=f"'{name}' is a built-in tool")
+        if not body.command:
+            raise HTTPException(status_code=400, detail="command (argv) is required")
+        try:
+            rec = platform.tools_registry.register(
+                name, body.description, body.parameters, body.command, body.timeout_seconds
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        platform.registry.register(platform.tools_registry.build_tool(rec), custom=True)
+        return {"name": rec.name}
+
+    @app.delete("/tools/custom/{name}")
+    def delete_custom_tool(name: str) -> dict[str, Any]:
+        removed = platform.tools_registry.remove(name)
+        platform.registry.unregister(name)
+        return {"removed": removed}
 
     @app.post("/agents/{name}/spawn")
     async def spawn_agent_ep(name: str, body: SpawnBody) -> dict[str, Any]:

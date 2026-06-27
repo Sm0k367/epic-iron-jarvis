@@ -55,6 +55,12 @@ def default_permissions() -> dict[str, str]:
         "list_agents": "allow",
         "create_agent": "ask",
         "spawn_agent": "ask",
+        # Agents authoring their own reusable tools. Listing is read-only; creating
+        # or deleting a tool (it runs commands) asks for approval like create_agent.
+        # Each created tool runs under "custom:<name>", which defaults to ASK.
+        "tool_list": "allow",
+        "tool_create": "ask",
+        "tool_delete": "ask",
         # Agent self-service (local, user-visible, reversible) — allowed.
         "schedule_create": "allow",
         "webhook_add": "allow",

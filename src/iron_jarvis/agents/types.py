@@ -32,6 +32,13 @@ _SELF_SERVICE_TOOLS = [
     "schedule_create",
     "webhook_add",
     "workflow_create",
+    # Author + reuse custom tools. "custom:*" is a sentinel the registry expands
+    # to every agent/user-authored tool, so a tool one agent creates is callable
+    # by every future agent.
+    "tool_create",
+    "tool_list",
+    "tool_delete",
+    "custom:*",
 ]
 # Real documents: read any file type, write within the workspace.
 _DOCUMENT_TOOLS = ["read_document", "write_document", "extract_pdf"]

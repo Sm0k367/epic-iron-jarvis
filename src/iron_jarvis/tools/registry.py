@@ -19,11 +19,21 @@ from .permissions import PermissionEngine
 class ToolRegistry:
     def __init__(self) -> None:
         self._tools: dict[str, Tool] = {}
+        #: names of agent/user-authored (custom) tools, expanded by the
+        #: ``"custom:*"`` allowlist sentinel so every agent can reach them.
+        self._custom: set[str] = set()
 
-    def register(self, tool: Tool) -> None:
+    def register(self, tool: Tool, custom: bool = False) -> None:
         if not tool.name:
             raise ValueError("tool must have a name")
         self._tools[tool.name] = tool
+        if custom:
+            self._custom.add(tool.name)
+
+    def unregister(self, name: str) -> bool:
+        """Remove a tool (used when a custom tool is deleted). False if absent."""
+        self._custom.discard(name)
+        return self._tools.pop(name, None) is not None
 
     def get(self, name: str) -> Tool | None:
         return self._tools.get(name)
@@ -31,10 +41,18 @@ class ToolRegistry:
     def names(self) -> list[str]:
         return sorted(self._tools)
 
+    def custom_names(self) -> list[str]:
+        return sorted(self._custom)
+
     def specs(self, allowed: list[str] | None = None) -> list[dict[str, Any]]:
-        tools = self._tools.values()
+        tools = list(self._tools.values())
         if allowed is not None:
-            tools = [t for t in tools if t.name in allowed]
+            allow = set(allowed)
+            wild = "custom:*" in allow  # reach every custom tool, by name unknown
+            tools = [
+                t for t in tools
+                if t.name in allow or (wild and t.name in self._custom)
+            ]
         return [t.spec() for t in tools]
 
     async def invoke(

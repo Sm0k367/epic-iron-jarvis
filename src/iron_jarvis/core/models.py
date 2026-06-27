@@ -116,6 +116,22 @@ class PendingReviewRecord(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utcnow)
 
 
+class DynamicToolRecord(SQLModel, table=True):
+    """A runtime-defined, reusable tool authored by a user or an agent — "tools
+    that make tools". The tool runs an argv-template command (placeholders filled
+    from typed parameters) in the session workspace, gated under ``custom:<name>``.
+    Persisted so every FUTURE agent/session sees and can call it."""
+
+    id: str = Field(default_factory=lambda: new_id("tool"), primary_key=True)
+    name: str = Field(index=True, unique=True)
+    description: str = ""
+    params_json: str = "[]"  # JSON list[{name,type,required,description}]
+    argv_json: str = "[]"  # JSON list[str] command template ({param} placeholders)
+    timeout_seconds: int = 60
+    created_by: str = ""  # session id of the author (provenance), or "" for user
+    created_at: datetime = Field(default_factory=utcnow)
+
+
 class SavedPromptRecord(SQLModel, table=True):
     """A reusable task template / saved prompt the user can re-run with one
     click (daily-driver: stop retyping the same task into a blank box)."""

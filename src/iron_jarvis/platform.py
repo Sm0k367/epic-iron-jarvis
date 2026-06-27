@@ -24,6 +24,7 @@ from .providers.manager import ProviderManager
 from .providers.router import ModelRouter
 from .providers.vault import BrowserVault
 from .tools.builtins import default_registry
+from .tools.dynamic import DynamicToolRegistry, dynamic_tool_tools
 from .tools.permissions import AskResolver, PermissionEngine
 from .tools.registry import ToolRegistry
 
@@ -122,6 +123,7 @@ class Platform:
     terminals: TerminalManager
     scheduler: Scheduler | None = None
     agents_registry: DynamicAgentRegistry | None = None
+    tools_registry: "DynamicToolRegistry | None" = None
 
 
 def build_platform(
@@ -350,6 +352,17 @@ def build_platform(
     # Dynamic agents (agents that add agents): load persisted + expose tools.
     platform.agents_registry = DynamicAgentRegistry(engine).load()
     for tool in agent_management_tools(platform, platform.agents_registry):
+        platform.registry.register(tool)
+
+    # Dynamic tools (agents that author REUSABLE tools): load persisted custom
+    # tools into the live registry (marked custom, so every agent reaches them via
+    # the "custom:*" allowlist sentinel), then expose the create/list/delete tools.
+    platform.tools_registry = DynamicToolRegistry(engine).load()
+    for record in platform.tools_registry.list():
+        platform.registry.register(
+            platform.tools_registry.build_tool(record), custom=True
+        )
+    for tool in dynamic_tool_tools(platform):
         platform.registry.register(tool)
 
     # Agent self-service: create schedules / webhooks / workflows (needs scheduler).
