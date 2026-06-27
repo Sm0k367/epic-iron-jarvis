@@ -14,9 +14,12 @@ import {
   Send,
   Download,
   Radio,
+  Volume2,
+  VolumeX,
 } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
+import { useTTS } from "@/lib/useTTS";
 import { post, del, API_BASE, ijToken, ApiError } from "@/lib/api";
 import type {
   SessionDetail,
@@ -81,6 +84,15 @@ export default function SessionDetailPage({
 
   const status = (session?.status ?? "").toLowerCase();
   const isActive = ACTIVE.has(status);
+
+  /* ---- Voice: speak the assistant's summary aloud (behind a toggle) ------- */
+  const tts = useTTS();
+  const summary = session?.summary ?? "";
+  useEffect(() => {
+    if (tts.enabled && summary) tts.speak(summary);
+    // speak() dedupes identical text, so re-runs are harmless.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [summary, tts.enabled]);
 
   /* ---- Live feed: filter the global event stream to this session ---------- */
   const { events } = useEvents(100);
@@ -205,6 +217,25 @@ export default function SessionDetailPage({
               icon={<FileText size={15} />}
               right={
                 <span className="flex items-center gap-2">
+                  {tts.supported && (
+                    <button
+                      type="button"
+                      onClick={tts.toggle}
+                      title={
+                        tts.enabled
+                          ? "Voice on — Iron Jarvis reads replies aloud"
+                          : "Voice off — click to hear replies"
+                      }
+                      aria-pressed={tts.enabled}
+                      className={`inline-flex h-7 w-7 items-center justify-center rounded-lg border transition-colors ${
+                        tts.enabled
+                          ? "border-accent/40 text-accent-soft"
+                          : "border-white/10 text-zinc-400 hover:border-white/20 hover:text-zinc-200"
+                      }`}
+                    >
+                      {tts.enabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
+                    </button>
+                  )}
                   {session.provider === "mock" && <MockChip />}
                   <Badge value={session.status} />
                 </span>

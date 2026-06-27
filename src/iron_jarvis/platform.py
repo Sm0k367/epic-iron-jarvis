@@ -46,7 +46,8 @@ from .agents.agent_tools import agent_management_tools
 from .agents.dynamic import DynamicAgentRegistry
 from .blackboard import BlackboardStore, blackboard_tools
 from .blackboard import models as _bb_models  # noqa: F401  (registers BlackboardRecord)
-from .comm import Notifier, build_notifier, httpx_post, notify_tools
+from .comm import Notifier, build_notifier, httpx_get, httpx_post, notify_tools
+from .comm import models as _comm_models  # noqa: F401  (registers InboundOffsetRecord)
 from .filesearch import FileSearchService, filesearch_tools
 from .integrations import IntegrationRegistry, integration_tools
 from .integrations import models as _intg_models  # noqa: F401
@@ -253,9 +254,14 @@ def build_platform(
     for tool in filesearch_tools(filesearch):
         registry.register(tool)
 
-    # Communication channels + Notifier (auto-alerts on selected events).
+    # Communication channels + Notifier (auto-alerts on selected events). The
+    # inbound (receive) leg is wired in the daemon lifespan; build the channels
+    # with a GET transport too so the poller can long-poll them.
     notifier = build_notifier(
-        getattr(config, "comm", None), secret_resolver=secrets.get, http_post=httpx_post
+        getattr(config, "comm", None),
+        secret_resolver=secrets.get,
+        http_post=httpx_post,
+        http_get=httpx_get,
     )
     for tool in notify_tools(notifier):
         registry.register(tool)

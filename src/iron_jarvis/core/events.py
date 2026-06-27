@@ -42,6 +42,10 @@ class EventType:
     PROVIDER_FAILED = "provider.failed"
     PROVIDER_DOWNGRADED = "provider.downgraded"
     WEBHOOK_RECEIVED = "webhook.received"
+    # Two-way comm (inbound): an authorized message arrived on a channel and a
+    # session was spawned for it; or a sender was refused (not on the allowlist).
+    COMM_RECEIVED = "comm.received"
+    COMM_REJECTED = "comm.rejected"
     SCHEDULE_FIRED = "schedule.fired"
     COMPUTERUSE_RUN_FINISHED = "computeruse.run_finished"
     # Motivation Layer (the pulse): a deliberation tick produced a candidate

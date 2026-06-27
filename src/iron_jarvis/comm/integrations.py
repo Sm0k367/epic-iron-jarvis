@@ -24,7 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
-from .base import HttpPost, SecretResolver, httpx_post
+from .base import HttpGet, HttpPost, SecretResolver, httpx_get, httpx_post
 from .channels import CHANNEL_TYPES, MockChannel
 from .notifier import DEFAULT_ALERT_EVENTS, Notifier
 
@@ -68,8 +68,9 @@ def channel_integrations() -> list[IntegrationSpec]:
         IntegrationSpec(
             "telegram",
             "communication",
-            "Send Telegram messages via the Bot API sendMessage endpoint.",
-            config_fields=["chat_id"],
+            "Send AND receive Telegram messages via the Bot API. Two-way comm: "
+            "set inbound_enabled + allowed_senders to text Iron Jarvis a task.",
+            config_fields=["chat_id", "inbound_enabled", "allowed_senders"],
             secret_fields=["token_secret"],
         ),
         IntegrationSpec(
@@ -90,14 +91,19 @@ def build_notifier(
     *,
     secret_resolver: SecretResolver | None = None,
     http_post: HttpPost | None = None,
+    http_get: HttpGet | None = None,
 ) -> Notifier:
     """Construct a :class:`Notifier` from a ``config.comm`` mapping.
 
     Falls back to a single :class:`MockChannel` named ``"mock"`` when no channels
-    are configured, so the platform always has a safe offline default.
+    are configured, so the platform always has a safe offline default. Each
+    channel's per-registration config (including the two-way fields
+    ``inbound_enabled`` and ``allowed_senders``) is preserved on the channel so
+    the inbound poller can read it.
     """
     comm_config = comm_config or {}
     transport = http_post or httpx_post
+    get_transport = http_get or httpx_get
 
     event_types = set(comm_config.get("event_types") or DEFAULT_ALERT_EVENTS)
     notifier = Notifier(
@@ -114,7 +120,12 @@ def build_notifier(
             continue
         notifier.add_channel(
             reg_name,
-            cls(spec, http_post=transport, secret_resolver=secret_resolver),
+            cls(
+                spec,
+                http_post=transport,
+                http_get=get_transport,
+                secret_resolver=secret_resolver,
+            ),
         )
 
     if not notifier.channels():

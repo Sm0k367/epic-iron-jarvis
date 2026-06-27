@@ -10,9 +10,13 @@ from __future__ import annotations
 
 from .base import (
     Channel,
+    HttpGet,
     HttpPost,
+    InboundMessage,
     SecretResolver,
+    httpx_get,
     httpx_post,
+    interpret_json,
     interpret_response,
 )
 from .channels import (
@@ -23,6 +27,7 @@ from .channels import (
     SlackChannel,
     TelegramChannel,
 )
+from .inbound import InboundPoller
 from .integrations import (
     IntegrationSpec,
     build_notifier,
@@ -33,9 +38,13 @@ from .tools import NotifyTool, notify_tools
 
 __all__ = [
     "Channel",
+    "HttpGet",
     "HttpPost",
+    "InboundMessage",
     "SecretResolver",
+    "httpx_get",
     "httpx_post",
+    "interpret_json",
     "interpret_response",
     "SlackChannel",
     "DiscordChannel",
@@ -43,6 +52,7 @@ __all__ = [
     "MockChannel",
     "ConsoleChannel",
     "CHANNEL_TYPES",
+    "InboundPoller",
     "Notifier",
     "format_event",
     "DEFAULT_ALERT_EVENTS",

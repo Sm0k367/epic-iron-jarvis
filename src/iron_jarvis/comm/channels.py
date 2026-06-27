@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from ..core.logging import get_logger
-from .base import Channel
+from .base import Channel, InboundMessage
 
 _log = get_logger("comm")
 
@@ -65,12 +65,15 @@ class DiscordChannel(Channel):
 
 
 class TelegramChannel(Channel):
-    """Telegram Bot API ``sendMessage``.
+    """Telegram Bot API ``sendMessage`` (outbound) + ``getUpdates`` (inbound).
 
-    config: ``{"token_secret": "...", "chat_id": 123456}``.
+    config: ``{"token_secret": "...", "chat_id": 123456}`` plus the optional
+    two-way fields ``inbound_enabled`` (bool) and ``allowed_senders`` (list of
+    Telegram user/chat ids). Inbound is OFF unless ``inbound_enabled`` is set.
     """
 
     name = "telegram"
+    supports_inbound = True
 
     def send(self, message: str, **kw: Any) -> dict[str, Any]:
         token_secret = self.config.get("token_secret")
@@ -86,6 +89,51 @@ class TelegramChannel(Channel):
             return self._fail("telegram: config needs `chat_id`")
         url = f"{TELEGRAM_API}/bot{token}/sendMessage"
         return self._post(url, {"chat_id": chat_id, "text": message})
+
+    def poll(
+        self, offset: int = 0, *, timeout: int = 0
+    ) -> tuple[list[InboundMessage], int]:
+        """Long-poll ``getUpdates`` and parse text messages.
+
+        Passing ``offset`` confirms (and so DROPS server-side) every update with
+        a lower id, which is what makes the durable offset dedupe across
+        restarts. Returns ``(messages, next_offset)`` where ``next_offset`` is
+        ``max(update_id) + 1``; on any failure returns ``([], offset)``.
+        """
+        token = self._resolve_secret(self.config.get("token_secret"))
+        if not token:
+            return [], offset
+        url = f"{TELEGRAM_API}/bot{token}/getUpdates"
+        params: dict[str, Any] = {"timeout": timeout}
+        if offset:
+            params["offset"] = offset
+        data = self._get_json(url, params)
+        if not data or not data.get("ok"):
+            return [], offset
+
+        messages: list[InboundMessage] = []
+        next_offset = offset
+        for upd in data.get("result", []) or []:
+            update_id = upd.get("update_id")
+            if isinstance(update_id, int):
+                next_offset = max(next_offset, update_id + 1)
+            msg = upd.get("message") or upd.get("edited_message") or {}
+            text = msg.get("text")
+            if not text:
+                continue  # ignore non-text updates (photos, joins, ...)
+            frm = msg.get("from") or {}
+            chat = msg.get("chat") or {}
+            messages.append(
+                InboundMessage(
+                    sender_id=str(frm.get("id", "")),
+                    text=text,
+                    update_id=update_id,
+                    reply_to=chat.get("id"),
+                    is_bot=bool(frm.get("is_bot", False)),
+                    raw=upd,
+                )
+            )
+        return messages, next_offset
 
 
 class MockChannel(Channel):

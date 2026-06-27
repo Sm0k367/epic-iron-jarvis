@@ -297,6 +297,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # with this unset; setting it does NOT enable autonomy (that's config-gated).
     if platform.intent is not None:
         platform.intent.orchestrator = orchestrator
+    # Two-way comm: the inbound poller. Constructed always (cheap), but it only
+    # does anything when a channel has inbound_enabled + credentials; the loop
+    # below is created ONLY when poller.enabled() — off-by-default, no network.
+    from ..comm import InboundPoller
+
+    inbound_poller = InboundPoller(
+        platform.notifier,
+        orchestrator,
+        platform.engine,
+        event_bus=platform.event_bus,
+    )
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI):
@@ -398,9 +409,43 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     await asyncio.sleep(interval)
 
             autonomy_task = asyncio.create_task(_autonomy_loop())
+
+        # Two-way comm inbound poller — the receive leg. GUARDED by
+        # poller.enabled() (True only when a channel has inbound_enabled +
+        # credentials), so by default + in tests the loop is NEVER created and no
+        # network happens. Mirrors the loops above: sleeps before the first poll
+        # (never blocks boot) and is cancelled on shutdown. Disable explicitly via
+        # IRONJARVIS_INBOUND=off.
+        inbound_task = None
+        if (
+            inbound_poller.enabled()
+            and os.environ.get("IRONJARVIS_INBOUND", "on").strip().lower()
+            not in {"0", "false", "no", "off"}
+        ):
+
+            async def _inbound_loop() -> None:
+                try:
+                    interval = max(
+                        1, int(os.environ.get("IRONJARVIS_INBOUND_INTERVAL", "3"))
+                    )
+                except ValueError:
+                    interval = 3
+                await asyncio.sleep(20)  # let boot settle before the first poll
+                while True:
+                    try:
+                        await inbound_poller.poll_once()
+                    except asyncio.CancelledError:
+                        raise
+                    except Exception:  # noqa: BLE001 - a poll must never kill the daemon
+                        log.exception("inbound comm poll failed")
+                    await asyncio.sleep(interval)
+
+            inbound_task = asyncio.create_task(_inbound_loop())
         try:
             yield
         finally:
+            if inbound_task is not None:
+                inbound_task.cancel()
             if autonomy_task is not None:
                 autonomy_task.cancel()
             if backup_task is not None:
