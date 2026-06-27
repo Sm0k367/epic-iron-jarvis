@@ -7,11 +7,19 @@ requested provider is unavailable or errors, emitting ``provider.failed`` (§31)
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Callable, Optional
 
 from ..core.events import EventBus, EventType
 from .adapters.base import LLMAdapter, LLMMessage, LLMResponse
 from .manager import ProviderManager
+
+#: Self-tuning hook (§6 phase-1): given a task class (the agent type, or ``None``),
+#: return the ``(provider, model)`` of a LOCAL model that has *proven itself* for
+#: that class — or ``None`` to leave routing untouched. Wired by the platform from
+#: config (``prefer_local_when_capable``) + eval/observability. When this is
+#: ``None`` (the default) routing is byte-for-byte identical to before, so the
+#: mock/default path and the offline test suite are unchanged.
+LocalOracle = Callable[[Optional[str]], "Optional[tuple[str, str]]"]
 
 
 class RouteResult:
@@ -27,15 +35,39 @@ class ModelRouter:
         manager: ProviderManager,
         default_provider: str,
         event_bus: EventBus,
+        *,
+        local_oracle: LocalOracle | None = None,
     ) -> None:
         self.manager = manager
         self.default_provider = default_provider
         self.event_bus = event_bus
+        # OFF by default: with no oracle, _resolve behaves exactly as before.
+        self._local_oracle = local_oracle
 
     def _resolve(
-        self, provider: str | None, model: str | None
+        self, provider: str | None, model: str | None, task_class: str | None = None
     ) -> tuple[LLMAdapter, str, bool]:
-        """Return (adapter, requested_provider, downgraded_to_mock)."""
+        """Return (adapter, requested_provider, downgraded_to_mock).
+
+        Self-tuning (opt-in): only when the caller is using the *default* route
+        (no explicit provider, or the default provider) AND an oracle is wired
+        AND it nominates a LOCAL model that is actually available, prefer that
+        local model for this task class. An explicit non-default provider choice
+        is always honored as-is; an unavailable/declined local pick falls through
+        to the unchanged routing below.
+        """
+        if self._local_oracle is not None and (
+            provider is None or provider == self.default_provider
+        ):
+            try:
+                pick = self._local_oracle(task_class)
+            except Exception:  # never let the oracle break routing
+                pick = None
+            if pick is not None:
+                lprov, lmodel = pick
+                if lprov != "mock" and self.manager.available(lprov):
+                    return self.manager.get(lprov, lmodel), lprov, False
+
         wanted = provider or self.default_provider
         if wanted != "mock" and not self.manager.available(wanted):
             return self.manager.get("mock"), wanted, True
@@ -50,8 +82,9 @@ class ModelRouter:
         messages: list[LLMMessage],
         tools: list[dict[str, Any]],
         session_id: str | None = None,
+        task_class: str | None = None,
     ) -> RouteResult:
-        adapter, wanted, downgraded = self._resolve(provider, model)
+        adapter, wanted, downgraded = self._resolve(provider, model, task_class)
         if downgraded:
             # Never silently fake it: tell the user their model isn't connected.
             await self.event_bus.publish(
@@ -74,6 +107,22 @@ class ModelRouter:
                 {"provider": adapter.provider, "error": f"{type(exc).__name__}: {exc}"},
                 session_id=session_id,
             )
+            # Before faking it with mock, try the real DEFAULT provider: a
+            # self-tuned LOCAL pick that's momentarily down must fall back to the
+            # healthy cloud default, not to a fabricated mock answer.
+            if (
+                adapter.provider != self.default_provider
+                and self.default_provider != "mock"
+                and self.manager.available(self.default_provider)
+            ):
+                try:
+                    alt = self.manager.get(self.default_provider, model)
+                    response = await alt.complete(
+                        system=system, messages=messages, tools=tools
+                    )
+                    return RouteResult(response, alt.provider, alt.model)
+                except Exception:  # noqa: BLE001 — default also failed; use mock
+                    pass
             fallback = self.manager.get("mock")
             if fallback is adapter:
                 raise

@@ -28,6 +28,7 @@ import {
   SquareTerminal,
   MoveUpRight,
   GitBranch,
+  Gauge,
   DownloadCloud,
   Settings,
   LifeBuoy,
@@ -62,6 +63,7 @@ const NAV: NavSection[] = [
       { href: "/agents", label: "Agents", icon: Bot },
       { href: "/tools", label: "Tools", icon: Wrench },
       { href: "/self-dev", label: "Self-development", icon: GitBranch },
+      { href: "/autonomy", label: "Autonomy", icon: Gauge },
     ],
   },
   {

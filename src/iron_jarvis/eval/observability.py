@@ -70,6 +70,57 @@ class Observability:
             "event_count": event_count,
         }
 
+    def local_quality(
+        self,
+        provider: str,
+        task_class: str | None = None,
+        min_samples: int = 3,
+        model: str | None = None,
+    ) -> float | None:
+        """Average completion score for evaluated sessions that ran on ``provider``.
+
+        Optionally filtered to a task class (the agent type). Returns ``None`` when
+        there aren't at least ``min_samples`` evaluated sessions to judge from —
+        the caller treats "not enough evidence" as "don't prefer the local model".
+        Read-only and defensive: never raises (a bad/empty DB yields ``None``).
+
+        This is the evidence the self-tuning router (§6) consults: only once a
+        local model has *demonstrably* met a quality bar for a class of work do we
+        start preferring it for that class.
+        """
+        try:
+            with session_scope(self.engine) as db:
+                evals = list(db.exec(select(Evaluation)))
+                runs = list(db.exec(select(AgentRun)))
+        except Exception:  # pragma: no cover - degrade rather than crash
+            return None
+
+        by_session: dict[str, list[AgentRun]] = {}
+        for r in runs:
+            by_session.setdefault(r.session_id, []).append(r)
+
+        def _agent_value(at: object) -> str:
+            return getattr(at, "value", at) if at is not None else ""
+
+        scores: list[float] = []
+        for e in evals:
+            rs = by_session.get(e.session_id, [])
+            if not rs:
+                continue
+            if not any((r.provider or "") == provider for r in rs):
+                continue
+            if model is not None and not any((r.model or "") == model for r in rs):
+                continue  # don't credit a different local model's track record
+            if task_class is not None and not any(
+                _agent_value(r.agent_type) == task_class for r in rs
+            ):
+                continue
+            scores.append(float(e.completion))
+
+        if len(scores) < max(1, int(min_samples)):
+            return None
+        return sum(scores) / len(scores)
+
     def usage_summary(self, since_days: int = 30) -> dict:
         """Cost/usage analytics over AgentRun rows in the last ``since_days``.
 

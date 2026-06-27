@@ -151,6 +151,13 @@ class Config(BaseModel):
     event_retention_days: int = 0  # 0 = keep forever; >0 prunes old events on boot
     ollama_base_url: str | None = None  # local OpenAI-compatible (Ollama) endpoint URL
     ollama_model: str = "llama3.1"  # default model for the local "ollama" provider
+    # Self-tuning router (§6 phase-1) — OFF by default. When enabled AND the local
+    # Ollama model is configured AND eval/observability shows it has met the
+    # quality bar for a task class, the router prefers it for that class. With the
+    # flag off (default) routing is byte-for-byte unchanged and fully offline-safe.
+    prefer_local_when_capable: bool = False
+    local_quality_bar: float = 0.75  # avg completion a local model must clear
+    local_quality_min_samples: int = 3  # evaluated sessions needed before trusting
     # Embeddings (§22 Total Recall): pick a real local embedder when one is
     # reachable, else the offline MockEmbedder. "auto" probes Ollama once and
     # falls back silently; "ollama" forces the real path (still safe-fallback if

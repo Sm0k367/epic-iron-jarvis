@@ -99,6 +99,8 @@ class AgentRuntime:
                 messages=messages,
                 tools=tool_specs,
                 session_id=session.id,
+                # Task class for the (opt-in) self-tuning router: the agent type.
+                task_class=agent_def.type.value,
             )
             resp = route.response
             run.steps = step + 1

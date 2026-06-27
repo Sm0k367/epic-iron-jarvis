@@ -196,7 +196,32 @@ def build_platform(
         ollama_base_url=config.ollama_base_url,
         ollama_model=config.ollama_model,
     )
-    router = ModelRouter(providers, config.default_provider, event_bus)
+    # Self-tuning router (§6 phase-1), OFF by default: only when the user opts in
+    # (prefer_local_when_capable) AND a local Ollama model is configured AND it has
+    # demonstrably met the quality bar for a task class do we prefer it for that
+    # class. `observability` is assigned below in this same scope and exists long
+    # before this closure is ever invoked (at request time), so the reference is
+    # safe. When the flag is off the closure returns None and routing is unchanged.
+    def _local_oracle(task_class: str | None) -> tuple[str, str] | None:
+        if not getattr(config, "prefer_local_when_capable", False):
+            return None
+        if not getattr(config, "ollama_base_url", None):
+            return None
+        bar = float(getattr(config, "local_quality_bar", 0.75))
+        min_samples = int(getattr(config, "local_quality_min_samples", 3))
+        quality = observability.local_quality(
+            "ollama",
+            task_class=task_class,
+            min_samples=min_samples,
+            model=config.ollama_model,  # judge the model that will actually serve
+        )
+        if quality is not None and quality >= bar:
+            return ("ollama", config.ollama_model)
+        return None
+
+    router = ModelRouter(
+        providers, config.default_provider, event_bus, local_oracle=_local_oracle
+    )
     registry = default_registry()
 
     # Phase 4: route the shell tool through the Sandbox Manager (same "shell" name).
