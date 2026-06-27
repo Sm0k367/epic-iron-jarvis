@@ -10,7 +10,11 @@
   "scripts": {
     "start": "electron .",
     "dev": "electron .",
-    "dist": "electron-builder --win"
+    "dist": "electron-builder --win",
+    "dist:full": "powershell -ExecutionPolicy Bypass -File ./build-installer.ps1"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9"
   },
   "devDependencies": {
     "electron": "^31.7.7",
@@ -26,7 +30,6 @@
   "build": {
     "appId": "com.realdealcpa.ironjarvis",
     "productName": "Iron Jarvis",
-    "//note": "DEV WRAPPER: this packaged app still expects the Iron Jarvis repo (the Python daemon + the ./dashboard) to live one directory ABOVE the app (path.join(__dirname,'..')). It launches `uv run ironjarvis serve` and `pnpm start` from there. A fully self-contained installer that bundles Python + a prebuilt dashboard is a future step (see README).",
     "directories": {
       "output": "release"
     },
@@ -36,7 +39,10 @@
       "loading.html",
       "assets/**"
     ],
-    "extraResources": [],
+    "extraResources": [
+      { "from": "../packaging/dist/ironjarvis", "to": "daemon" },
+      { "from": "../dashboard/.next/standalone", "to": "dashboard" }
+    ],
     "win": {
       "target": "nsis",
       "icon": "assets/icon.png"
@@ -44,6 +50,9 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true
-    }
+    },
+    "publish": [
+      { "provider": "github", "owner": "RealDealCPA-VR", "repo": "Iron-Jarvis" }
+    ]
   }
 }

@@ -1,0 +1,62 @@
+# Hidden-imports / collect / exclude reference for packaging/ironjarvis.spec
+# (This file is documentation only — the spec is the source of truth.)
+
+# --- collect_submodules (whole package, so SQLModel tables all register) ----
+iron_jarvis            # collect_submodules('iron_jarvis') + collect_data_files
+numpy                  # collect_submodules('numpy')  (binaries via builtin hook)
+websockets             # collect_submodules('websockets')  (uvicorn[standard] WS)
+winpty                 # collect_submodules('winpty')  (terminals PTY, win32 only)
+
+# --- collect_all (submodules + data + metadata) -----------------------------
+fastapi
+starlette
+uvicorn
+sqlmodel
+sqlalchemy
+pydantic
+pydantic_core
+cryptography
+apscheduler            # cron scheduler; started at daemon boot via lifespan
+anyio
+click
+typer
+rich
+httpx
+httpcore
+h11
+tomli_w
+yaml                  # pyyaml (skills SKILL.md frontmatter)
+# Document libraries (lazily imported in iron_jarvis.documents):
+pypdf
+docx                  # python-docx
+openpyxl
+pptx                  # python-pptx
+fpdf                  # fpdf2
+PIL                   # Pillow (image describe in readers)
+
+# --- explicit hiddenimports (dynamic/string imports static analysis misses) -
+greenlet
+uvicorn.lifespan.on
+uvicorn.lifespan.off
+uvicorn.loops.asyncio
+uvicorn.loops.auto
+uvicorn.protocols.http.auto
+uvicorn.protocols.http.h11_impl
+uvicorn.protocols.http.httptools_impl
+uvicorn.protocols.websockets.auto
+uvicorn.protocols.websockets.websockets_impl
+uvicorn.protocols.websockets.wsproto_impl
+httptools
+
+# --- excludes (heavy OPTIONAL deps; daemon must boot WITHOUT them) -----------
+# All lazily imported, only when a real key / opt-in feature is used.
+playwright            # computer-use only
+docker                # docker sandbox only
+anthropic             # real Anthropic key only (mock is default provider)
+openai                # real OpenAI key only
+# dev/notebook/GUI toolchains never used by the daemon:
+tkinter
+matplotlib
+pytest
+IPython
+notebook

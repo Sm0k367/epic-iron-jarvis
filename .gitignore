@@ -10,6 +10,12 @@ __pycache__/
 .ironjarvis/
 RESULT.md
 
+# PyInstaller frozen-daemon build artifacts (the .spec IS tracked)
+build/
+dist/
+packaging/build/
+packaging/dist/
+
 # Node / dashboard
 dashboard/node_modules/
 dashboard/.next/
