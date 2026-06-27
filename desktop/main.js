@@ -1,18 +1,38 @@
 // Iron Jarvis — Electron main process (CommonJS).
 //
-// What this does (dev-mode wrapper):
-//   1. Spawns the Python daemon:  uv run ironjarvis serve --host 127.0.0.1 --port <DAEMON_PORT> --root <repoRoot>
-//   2. Spawns the Next.js dashboard:  pnpm start   (Next reads PORT from env)
+// What this does:
+//   1. Spawns the Python daemon (dev: `uv run ironjarvis serve`; packaged: the
+//      frozen ironjarvis.exe) with a per-install IRONJARVIS_TOKEN.
+//   2. Spawns the Next.js dashboard (dev: `pnpm start`; packaged: standalone
+//      server.js via Electron's bundled Node).
 //   3. Shows a dark "Starting Iron Jarvis…" splash while polling the dashboard.
-//   4. When the dashboard answers, opens the real 1440x900 window on http://localhost:<DASHBOARD_PORT>.
-//   5. On quit, kills BOTH child processes (taskkill /T /F on Windows).
+//   4. When the dashboard answers, opens the real window (size/pos restored from
+//      window-state.json) on http://localhost:<DASHBOARD_PORT>.
+//   5. ALWAYS-ON: closing the window HIDES it to a system tray; the daemon +
+//      dashboard keep running so the scheduler/cron/webhooks survive for weeks.
+//      Only an explicit Quit (tray menu / app.quit) tears the children down.
 //
 // The repo (daemon + ./dashboard) is expected one directory above this file.
 
-const { app, BrowserWindow, Menu, shell, dialog } = require("electron");
+const {
+  app,
+  BrowserWindow,
+  Menu,
+  Tray,
+  shell,
+  dialog,
+  globalShortcut,
+  session,
+  screen,
+  nativeImage,
+} = require("electron");
 const { spawn } = require("child_process");
+const crypto = require("crypto");
+const fs = require("fs");
 const http = require("http");
 const path = require("path");
+
+const windowState = require("./windowState");
 
 // --- Configuration -------------------------------------------------------
 
@@ -38,13 +58,65 @@ const DASHBOARD_URL = `http://localhost:${DASHBOARD_PORT}`;
 const DASHBOARD_PROBE_URL = `http://127.0.0.1:${DASHBOARD_PORT}/`;
 const STARTUP_TIMEOUT_MS = 30000;
 
+const HOTKEY = "CommandOrControl+Shift+J";
+
 // --- State ---------------------------------------------------------------
 
 let daemonProc = null;
 let dashboardProc = null;
 let loadingWin = null;
 let mainWin = null;
+let tray = null;
 let shuttingDown = false;
+// isQuitting distinguishes "user wants to fully exit" (tear everything down)
+// from a normal window close (just hide to the tray, keep the daemon alive).
+let isQuitting = false;
+let authToken = null; // per-install bearer token (also passed to the daemon)
+let userDataDir = null; // app.getPath('userData') — set once app is ready
+let saveBoundsTimer = null; // debounce timer for window-state writes
+
+// --- Per-install auth token ---------------------------------------------
+// The local daemon is RCE-by-design; a token blocks drive-by requests from any
+// website (the daemon enforces IRONJARVIS_TOKEN when set). We generate one on
+// first launch, persist it under userData, pass it to the daemon's env, and the
+// browser sends it back (localStorage 'ij_token' -> header + ws ?token=).
+
+function getOrCreateToken() {
+  const file = path.join(userDataDir, "token.txt");
+  try {
+    const existing = (fs.readFileSync(file, "utf8") || "").trim();
+    if (/^[a-f0-9]{32,}$/i.test(existing)) return existing;
+  } catch {
+    /* not created yet */
+  }
+  const token = crypto.randomBytes(32).toString("hex");
+  try {
+    fs.writeFileSync(file, token, { encoding: "utf8", mode: 0o600 });
+  } catch (err) {
+    // Non-fatal: a fresh token each launch is still internally consistent
+    // (daemon env + browser localStorage both get THIS value this session).
+    console.error("[token] could not persist token.txt:", err && err.message);
+  }
+  return token;
+}
+
+// Inject the bearer token on every HTTP/WS request to the daemon origin. This
+// is the belt-and-suspenders for HTTP: requests are authorized even before the
+// renderer's localStorage is populated (the WS guard still relies on the
+// localStorage-driven ?token= query, which the preload sets pre-bundle).
+function installAuthHeaderInjection() {
+  if (!authToken) return;
+  const filter = {
+    urls: [`*://127.0.0.1:${DAEMON_PORT}/*`, `*://localhost:${DAEMON_PORT}/*`],
+  };
+  session.defaultSession.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
+    const headers = details.requestHeaders || {};
+    if (!headers.Authorization && !headers.authorization) {
+      headers.Authorization = `Bearer ${authToken}`;
+    }
+    callback({ requestHeaders: headers });
+  });
+}
 
 // --- Child process helpers ----------------------------------------------
 
@@ -137,6 +209,46 @@ function waitForDashboard(timeoutMs, intervalMs) {
   });
 }
 
+// --- Window-state persistence -------------------------------------------
+
+function flushWindowState() {
+  if (saveBoundsTimer) {
+    clearTimeout(saveBoundsTimer);
+    saveBoundsTimer = null;
+  }
+  if (!userDataDir || !mainWin || mainWin.isDestroyed()) return;
+  // Don't persist a minimized/fullscreen rectangle — restore should bring back
+  // the last "normal" size.
+  if (mainWin.isMinimized() || mainWin.isFullScreen()) return;
+  windowState.saveBounds(userDataDir, mainWin.getBounds());
+}
+
+function scheduleSaveWindowState() {
+  if (!mainWin || mainWin.isDestroyed()) return;
+  if (mainWin.isMinimized() || mainWin.isFullScreen()) return;
+  if (saveBoundsTimer) clearTimeout(saveBoundsTimer);
+  saveBoundsTimer = setTimeout(() => {
+    saveBoundsTimer = null;
+    if (mainWin && !mainWin.isDestroyed() && mainWin.isVisible()) {
+      windowState.saveBounds(userDataDir, mainWin.getBounds());
+    }
+  }, 600);
+}
+
+// Compute the BrowserWindow bounds to open with: restore the saved rect when it
+// is still visible on a connected display; keep just the size (centered) when
+// the saved position is off-screen; otherwise the shipped 1440x900 default.
+function initialBounds() {
+  const fallback = { ...windowState.DEFAULT_BOUNDS };
+  const saved = windowState.loadBounds(userDataDir);
+  if (!saved) return { bounds: fallback, center: true };
+  if (windowState.isVisibleOnDisplay(saved, screen.getAllDisplays())) {
+    return { bounds: saved, center: false };
+  }
+  // Size is usable but the monitor it lived on is gone -> keep size, recenter.
+  return { bounds: { width: saved.width, height: saved.height }, center: true };
+}
+
 // --- Windows -------------------------------------------------------------
 
 function createLoadingWindow() {
@@ -155,9 +267,12 @@ function createLoadingWindow() {
 }
 
 function createMainWindow() {
+  const { bounds, center } = initialBounds();
+
   mainWin = new BrowserWindow({
-    width: 1440,
-    height: 900,
+    width: bounds.width,
+    height: bounds.height,
+    ...(center ? { center: true } : { x: bounds.x, y: bounds.y }),
     backgroundColor: "#0a0a0f",
     show: false,
     title: "Iron Jarvis",
@@ -166,6 +281,9 @@ function createMainWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      // Hand the per-install token to preload.js so it can seed localStorage
+      // BEFORE the dashboard bundle runs (no 401 race). Empty when token-less.
+      additionalArguments: [`--ij-token=${authToken || ""}`],
     },
   });
 
@@ -173,6 +291,37 @@ function createMainWindow() {
     mainWin.show();
     if (loadingWin && !loadingWin.isDestroyed()) loadingWin.close();
     loadingWin = null;
+  });
+
+  // Safety net for the token: if the preload's localStorage write didn't take
+  // (sandbox/timing), set it from the page's main world and reload ONCE so
+  // steady-state requests carry it. When preload already set it (the normal
+  // path) the value matches and we DON'T reload (no flicker). Guarded so the
+  // reload can happen at most once -> no permanent 401, no reload loop.
+  let tokenEnsured = false;
+  mainWin.webContents.on("did-finish-load", () => {
+    if (tokenEnsured || !authToken) return;
+    const lit = JSON.stringify(authToken);
+    const js =
+      "(() => { try {" +
+      `  if (localStorage.getItem('ij_token') !== ${lit}) {` +
+      `    localStorage.setItem('ij_token', ${lit}); return 'set';` +
+      "  } return 'present';" +
+      "} catch (e) { return 'error'; } })()";
+    mainWin.webContents
+      .executeJavaScript(js)
+      .then((result) => {
+        tokenEnsured = true;
+        if (result === "set" && mainWin && !mainWin.isDestroyed()) {
+          // Token was missing when the page first loaded -> reload so the
+          // already-issued (and any future) requests re-run WITH the token.
+          mainWin.webContents.reload();
+        }
+      })
+      .catch((err) => {
+        tokenEnsured = true;
+        console.error("[token] localStorage ensure failed:", err && err.message);
+      });
   });
 
   // Open target=_blank / external links in the system browser, not in-app.
@@ -189,11 +338,74 @@ function createMainWindow() {
     }
   });
 
+  // Persist size/position as the user moves/resizes.
+  mainWin.on("resize", scheduleSaveWindowState);
+  mainWin.on("move", scheduleSaveWindowState);
+
+  // The reliability fix: a normal window close HIDES to the tray (keeping the
+  // daemon + dashboard alive). Only an explicit Quit (isQuitting) really closes.
+  mainWin.on("close", (event) => {
+    flushWindowState();
+    if (!isQuitting) {
+      event.preventDefault();
+      if (mainWin.isFullScreen()) mainWin.setFullScreen(false);
+      mainWin.hide();
+    }
+  });
+
   mainWin.on("closed", () => {
     mainWin = null;
   });
 
   mainWin.loadURL(DASHBOARD_URL);
+}
+
+// Show (and if necessary recreate) the main window — used by the tray, the
+// global hotkey, and a second app launch.
+function showMainWindow() {
+  if (mainWin && !mainWin.isDestroyed()) {
+    if (mainWin.isMinimized()) mainWin.restore();
+    if (!mainWin.isVisible()) mainWin.show();
+    mainWin.focus();
+  } else {
+    // Window was torn down but the app is still alive in the tray -> rebuild it.
+    createMainWindow();
+  }
+}
+
+// --- System tray ---------------------------------------------------------
+
+function createTray() {
+  if (tray) return;
+  const iconPath = path.join(__dirname, "assets", "icon.png");
+  let image;
+  try {
+    image = nativeImage.createFromPath(iconPath);
+  } catch {
+    image = nativeImage.createEmpty();
+  }
+  try {
+    tray = new Tray(image.isEmpty() ? nativeImage.createEmpty() : image);
+  } catch (err) {
+    console.error("[tray] could not create tray:", err && err.message);
+    return;
+  }
+  tray.setToolTip("Iron Jarvis — running");
+  const menu = Menu.buildFromTemplate([
+    { label: "Open Iron Jarvis", click: () => showMainWindow() },
+    { type: "separator" },
+    {
+      label: "Quit Iron Jarvis",
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      },
+    },
+  ]);
+  tray.setContextMenu(menu);
+  // Left-click / double-click both reopen the window (idempotent).
+  tray.on("click", () => showMainWindow());
+  tray.on("double-click", () => showMainWindow());
 }
 
 // --- Auto-update (packaged builds only) ---------------------------------
@@ -225,6 +437,7 @@ function checkForUpdates() {
       detail: "Restart to install the update.",
     });
     if (choice === 0) {
+      isQuitting = true; // allow the window to actually close
       shuttingDown = true; // ensure the daemon/dashboard children are killed
       autoUpdater.quitAndInstall();
     }
@@ -241,11 +454,20 @@ function buildMenu() {
     {
       label: "Iron Jarvis",
       submenu: [
+        { label: "Open / Show Window", accelerator: HOTKEY, click: () => showMainWindow() },
+        { type: "separator" },
         { role: "reload" },
         { role: "forceReload" },
         { role: "toggleDevTools" },
         { type: "separator" },
-        { role: "quit" },
+        {
+          label: "Quit Iron Jarvis",
+          accelerator: "CommandOrControl+Q",
+          click: () => {
+            isQuitting = true;
+            app.quit();
+          },
+        },
       ],
     },
     { role: "editMenu" },
@@ -267,20 +489,26 @@ function buildMenu() {
 // --- Startup sequence ----------------------------------------------------
 
 async function startup() {
+  userDataDir = app.getPath("userData"); // writable per-user state dir
+  authToken = getOrCreateToken();
+  installAuthHeaderInjection();
+
   buildMenu();
+  createTray();
   createLoadingWindow();
+  registerHotkey();
 
   if (IS_PACKAGED) {
     // PACKAGED: frozen daemon exe + standalone dashboard run by Electron's Node.
     // No Python/uv/Node/pnpm required on the user's machine.
-    const stateDir = app.getPath("userData"); // writable per-user state (.ironjarvis lives here)
+    const stateDir = userDataDir; // the daemon's .ironjarvis lives here
     // 1) Frozen daemon. Must serve on 8787 to match the build-time-baked client URL.
     daemonProc = spawnChild(
       "daemon",
       DAEMON_EXE,
       ["serve", "--host", "127.0.0.1", "--port", String(DAEMON_PORT), "--root", stateDir],
       path.dirname(DAEMON_EXE),
-      {},
+      { IRONJARVIS_TOKEN: authToken },
       false
     );
     // 2) Next.js standalone server (server.js) via Electron's bundled Node.
@@ -314,16 +542,18 @@ async function startup() {
           "Iron Jarvis (dev mode) launches the local repo's Python daemon (via uv) and\n" +
           "the Next.js dashboard (via pnpm). Install the tool(s) above, then relaunch."
       );
+      isQuitting = true;
       shutdown();
       app.quit();
       return;
     }
-    // 1) Python daemon (FastAPI on DAEMON_PORT).
+    // 1) Python daemon (FastAPI on DAEMON_PORT) with the per-install token.
     daemonProc = spawnChild(
       "daemon",
       "uv",
       ["run", "ironjarvis", "serve", "--host", "127.0.0.1", "--port", String(DAEMON_PORT), "--root", REPO_ROOT],
-      REPO_ROOT
+      REPO_ROOT,
+      { IRONJARVIS_TOKEN: authToken }
     );
     // 2) Next.js dashboard. `next start` honours the PORT env var.
     dashboardProc = spawnChild("dashboard", "pnpm", ["start"], DASHBOARD_DIR, {
@@ -343,6 +573,7 @@ async function startup() {
         "    cd dashboard\n    pnpm install\n    pnpm build\n\n" +
         "Then relaunch Iron Jarvis. Check the terminal for [daemon]/[dashboard] logs."
     );
+    isQuitting = true;
     shutdown();
     app.quit();
     return;
@@ -352,47 +583,82 @@ async function startup() {
   checkForUpdates();
 }
 
+// --- Global hotkey -------------------------------------------------------
+
+function registerHotkey() {
+  try {
+    const ok = globalShortcut.register(HOTKEY, () => showMainWindow());
+    if (!ok) console.warn(`[hotkey] ${HOTKEY} registration failed (already taken?)`);
+  } catch (err) {
+    console.error("[hotkey] registration error:", err && err.message);
+  }
+}
+
 // --- App lifecycle -------------------------------------------------------
 
-// Single-instance: a second launch focuses the existing window instead of
+// Single-instance: a second launch focuses/opens the existing window instead of
 // spawning a duplicate daemon/dashboard pair.
 const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
   app.on("second-instance", () => {
-    const win = mainWin || loadingWin;
-    if (win) {
-      if (win.isMinimized()) win.restore();
-      win.focus();
+    if (mainWin && !mainWin.isDestroyed()) {
+      showMainWindow();
+    } else if (loadingWin && !loadingWin.isDestroyed()) {
+      if (loadingWin.isMinimized()) loadingWin.restore();
+      loadingWin.focus();
     }
+    // else still booting: the in-flight startup will open the window itself.
   });
 
   app.whenReady().then(startup);
 
   app.on("activate", () => {
-    // macOS: re-open a window if the children are still alive.
-    if (BrowserWindow.getAllWindows().length === 0 && !shuttingDown) {
+    // macOS: re-open/show a window if the app is still alive. Don't create one
+    // mid-boot (the splash is up and startup will open the real window).
+    if (shuttingDown) return;
+    if (mainWin && !mainWin.isDestroyed()) {
+      showMainWindow();
+    } else if (!loadingWin) {
       createMainWindow();
     }
   });
 
+  // ALWAYS-ON: do NOT quit when the window is closed. The window hides to the
+  // tray (see the 'close' handler) and the daemon + dashboard keep running.
+  // Teardown happens only via an explicit Quit (isQuitting -> before-quit).
   app.on("window-all-closed", () => {
-    shutdown();
-    app.quit();
+    // Intentionally empty: stay resident in the tray.
   });
 
   app.on("before-quit", () => {
+    isQuitting = true;
+    flushWindowState();
     shutdown();
+  });
+
+  app.on("will-quit", () => {
+    globalShortcut.unregisterAll();
+    if (tray) {
+      try {
+        tray.destroy();
+      } catch {
+        /* ignore */
+      }
+      tray = null;
+    }
   });
 
   // Belt-and-suspenders: kill children if the main process is torn down.
   process.on("exit", shutdown);
   process.on("SIGINT", () => {
+    isQuitting = true;
     shutdown();
     app.quit();
   });
   process.on("SIGTERM", () => {
+    isQuitting = true;
     shutdown();
     app.quit();
   });
