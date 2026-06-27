@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -170,12 +172,27 @@ def test_symlink_escape_is_blocked(tmp_path: Path):
     secret_dir.mkdir()
     (secret_dir / "leak.txt").write_text("SECRET_LEAK\n", encoding="utf-8")
 
-    # Symlink inside the root pointing outside it.
+    # A link inside the root pointing outside it. Prefer a real symlink; on
+    # Windows (where symlinks need admin) fall back to a directory junction,
+    # which needs no privileges and IS followed by os.walk — so it genuinely
+    # exercises the resolve()-outside-root containment guard.
     link = root / "escape"
     try:
         link.symlink_to(secret_dir, target_is_directory=True)
     except (OSError, NotImplementedError):
-        pytest.skip("symlinks not permitted on this platform/session")
+        made = False
+        if os.name == "nt":
+            try:
+                subprocess.run(
+                    ["cmd", "/c", "mklink", "/J", str(link), str(secret_dir)],
+                    check=True,
+                    capture_output=True,
+                )
+                made = True
+            except (OSError, subprocess.CalledProcessError):
+                made = False
+        if not made:
+            pytest.skip("neither symlinks nor directory junctions are available")
 
     svc = FileSearchService([root])
     # The leaked content must not surface (resolves outside the root).

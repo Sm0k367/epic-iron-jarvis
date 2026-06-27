@@ -68,10 +68,16 @@ def test_value_is_encrypted_at_rest(manager, engine, tmp_path):
     assert row is not None
     assert PLAINTEXT not in row.enc_value
 
-    # Neither the on-disk DB file nor the key file may contain the plaintext.
-    db_bytes = (tmp_path / "t.db").read_bytes()
-    assert PLAINTEXT.encode() not in db_bytes
-    assert row.enc_value.encode() in db_bytes  # ciphertext IS persisted
+    # Neither the on-disk DB file(s) nor the key file may contain the plaintext.
+    # Under WAL journaling the latest write may live in the -wal sidecar until a
+    # checkpoint folds it into the main file, so check the whole on-disk set.
+    on_disk = (tmp_path / "t.db").read_bytes()
+    for sidecar in ("t.db-wal", "t.db-shm"):
+        p = tmp_path / sidecar
+        if p.exists():
+            on_disk += p.read_bytes()
+    assert PLAINTEXT.encode() not in on_disk
+    assert row.enc_value.encode() in on_disk  # ciphertext IS persisted (db or WAL)
 
 
 def test_list_returns_names_kinds_never_values(manager):

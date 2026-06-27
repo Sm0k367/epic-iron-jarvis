@@ -4,10 +4,11 @@ A Supervisor decomposes a task and delegates to subagents which run with
 isolated context and return summarized results. These tests are fully offline
 and deterministic.
 
-Pitfall avoided: ``ProviderManager`` caches ONE adapter per provider name, so a
-single scripted "mock" provider would be shared (and consumed) by BOTH the
-supervisor and its subagent. We register a SEPARATE scripted provider ("super")
-for the supervisor and let subagents use the default scriptless "mock".
+Subagents INHERIT the parent session's provider/model (so a real multi-agent run
+uses the user's chosen model end-to-end). ``ProviderManager`` caches ONE adapter
+per provider name, so the scripted "super" adapter is shared and consumed in
+CALL ORDER across the supervisor and its inheriting child — the script below
+provides one entry per interleaved call (supervisor-t1 → child-t1 → supervisor-t2).
 """
 
 from __future__ import annotations
@@ -27,6 +28,14 @@ from iron_jarvis.tools.base import ToolContext
 from iron_jarvis.tools.permissions import PermissionEngine
 
 
+class SuperMock(MockLLMAdapter):
+    """A scripted mock that reports a DISTINCT provider name, so a child that
+    inherits the parent's provider is observable (run.provider == adapter.provider)."""
+
+    provider = "super"
+    model = "super-1"
+
+
 @pytest.fixture
 def platform(tmp_path):
     p = build_platform(str(tmp_path))
@@ -42,8 +51,9 @@ async def test_supervisor_delegates_to_subagent(platform):
     # A scripted supervisor: delegate one subtask, then summarize and stop.
     platform.providers.register(
         "super",
-        lambda: MockLLMAdapter(
+        lambda: SuperMock(
             script=[
+                # supervisor turn 1: delegate one subtask
                 LLMResponse(
                     tool_calls=[
                         ToolCall(
@@ -54,6 +64,13 @@ async def test_supervisor_delegates_to_subagent(platform):
                     ],
                     finish_reason="tool_use",
                 ),
+                # child (builder) turn 1: it inherits "super", so its single call
+                # consumes the next scripted entry — finish immediately.
+                LLMResponse(
+                    text="Subtask done.",
+                    finish_reason="stop",
+                ),
+                # supervisor turn 2: summarize and stop
                 LLMResponse(
                     text="Delegated and completed all subtasks.",
                     finish_reason="stop",
@@ -73,14 +90,15 @@ async def test_supervisor_delegates_to_subagent(platform):
     assert "subtask" in sup_run.result.lower() or "completed" in sup_run.result.lower()
 
     # A CHILD run exists (session-independent query), linked by parent_id, and
-    # it completed on the default offline "mock" provider.
+    # it INHERITED the supervisor's provider ("super") — real multi-agent uses
+    # the parent's model, not the offline mock.
     with session_scope(platform.engine) as db:
         all_runs = list(db.exec(select(AgentRun)))
     children = [r for r in all_runs if r.parent_id == sup_run.id]
     assert children, "expected at least one delegated child run"
     child = children[0]
     assert child.state == AgentState.COMPLETED
-    assert child.provider == "mock"
+    assert child.provider == "super"  # inherited from the parent session
     assert child.session_id != sess.id  # subagent ran in its own session
 
 
