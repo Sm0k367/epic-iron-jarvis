@@ -107,6 +107,20 @@ BUILTIN_SPECS: dict[str, ConnectionSpec] = {
         oauth_client_id="app_EMoamEEZ73f0CkXaXp7hrann",
         oauth_help="Log in with your ChatGPT (Plus/Pro) account via Codex.",
     ),
+    "xai": ConnectionSpec(
+        provider="xai",
+        display_name="xAI (Grok)",
+        method="api_key",  # xAI uses API keys today (OpenAI-compatible api.x.ai)
+        docs_url="https://console.x.ai",
+        key_help="Get a key at console.x.ai",
+        key_secret_name="xai_api_key",
+        # OAuth-READY: leave auth_url/token_url/oauth_client_id unset so this is
+        # key-only for now. The moment xAI publishes a public OAuth/PKCE client,
+        # set those three here (or override via the xai_oauth_client_id secret) and
+        # "Log in with your account" lights up through the SAME registry path used
+        # by Anthropic/OpenAI — no other code change needed.
+        oauth_help="xAI uses an API key today; account login activates once xAI ships a public OAuth client.",
+    ),
     "google": ConnectionSpec(
         provider="google",
         display_name="Google (Gemini)",

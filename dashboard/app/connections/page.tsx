@@ -14,6 +14,7 @@ import {
   ExternalLink,
   Plug,
   CheckCircle2,
+  Zap,
   type LucideIcon,
 } from "lucide-react";
 import { get, post, del, ApiError } from "@/lib/api";
@@ -68,6 +69,13 @@ const META: Record<string, ProviderMeta> = {
     tint: "text-sky-300",
     docsUrl: "https://console.cloud.google.com/apis/credentials",
     docsLabel: "Google Cloud Console",
+  },
+  xai: {
+    icon: Zap,
+    tint: "text-violet-300",
+    keyUrl: "https://console.x.ai",
+    keyLabel: "console.x.ai",
+    placeholder: "xai-…",
   },
   mock: { icon: MoonStar, tint: "text-amber-300" },
 };

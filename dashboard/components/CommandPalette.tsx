@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import {
   Search,
   PlugZap,
+  Cpu,
   Plus,
   CornerDownLeft,
   LayoutDashboard,
@@ -43,6 +44,8 @@ interface Command {
   icon: LucideIcon;
   href: string;
   keywords?: string;
+  /** When set, run this instead of navigating to href (e.g. open the switcher). */
+  action?: () => void;
 }
 
 // Quick actions (do something) listed first, then a full "jump to" index of
@@ -50,7 +53,8 @@ interface Command {
 const COMMANDS: Command[] = [
   // ── Actions ──────────────────────────────────────────────────────────────
   { id: "new-session", label: "New session", hint: "Action", icon: Plus, href: "/sessions?new=1", keywords: "run task agent start launch create" },
-  { id: "connect", label: "Connect a model", hint: "Action", icon: PlugZap, href: "/connections", keywords: "llm api key oauth anthropic openai google provider" },
+  { id: "connect", label: "Connect a model", hint: "Action", icon: PlugZap, href: "/connections", keywords: "llm api key oauth anthropic openai google grok xai provider account login" },
+  { id: "switch-model", label: "Switch model", hint: "Action", icon: Cpu, href: "#", keywords: "provider model default active grok claude gpt gemini change router", action: () => window.dispatchEvent(new Event("ij:open-switcher")) },
   { id: "open-usage", label: "View usage & cost", hint: "Action", icon: BarChart3, href: "/usage", keywords: "tokens cost spend report analytics billing" },
   { id: "open-templates", label: "Open task templates", hint: "Action", icon: LayoutTemplate, href: "/templates", keywords: "preset saved reusable task template" },
   // ── Jump to ──────────────────────────────────────────────────────────────
@@ -127,6 +131,10 @@ export function CommandPalette() {
   function run(cmd: Command | undefined) {
     if (!cmd) return;
     setOpen(false);
+    if (cmd.action) {
+      cmd.action();
+      return;
+    }
     router.push(cmd.href);
   }
 

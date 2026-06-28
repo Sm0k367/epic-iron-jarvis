@@ -26,7 +26,11 @@ PresenceResolver = Callable[[str], bool]
 AdapterFactory = Callable[..., LLMAdapter]
 
 #: API providers whose availability is gated on a real credential.
-API_PROVIDERS = ("anthropic", "openai", "google")
+API_PROVIDERS = ("anthropic", "openai", "google", "xai")
+
+#: xAI (Grok) is OpenAI-compatible, so it routes through the OpenAI adapter with
+#: a base_url override (same pattern as a local Ollama server).
+XAI_ENDPOINT = "https://api.x.ai/v1/chat/completions"
 
 
 class ProviderManager:
@@ -73,6 +77,18 @@ class ProviderManager:
                 # google connects via OAuth (specs.py method="oauth"): the
                 # credential is an access token, sent as Authorization: Bearer.
                 oauth=True,
+            ),
+        )
+        # xAI (Grok) — OpenAI-compatible hosted API; routes through the OpenAI
+        # adapter pointed at api.x.ai. Availability is gated on a real credential
+        # (an xAI API key, or an OAuth token if xAI later ships a public client).
+        self.register(
+            "xai",
+            lambda model=None: OpenAIAdapter(
+                model=model or "grok-2-latest",
+                base_url=XAI_ENDPOINT,
+                credential=lambda: self._cred("xai"),
+                provider_name="xai",
             ),
         )
         # Local "ollama" provider — an OpenAI-compatible server reached over a

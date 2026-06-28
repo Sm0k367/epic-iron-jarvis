@@ -36,6 +36,13 @@ KNOWN_MODELS: list[dict] = [
     {"provider": "anthropic", "model": "claude-sonnet-4-6"},
     {"provider": "anthropic", "model": "claude-haiku-4-5"},
     {"provider": "fable", "model": "claude-fable-5"},
+    {"provider": "openai", "model": "gpt-4o"},
+    {"provider": "openai", "model": "gpt-4o-mini"},
+    {"provider": "google", "model": "gemini-2.0-flash"},
+    {"provider": "google", "model": "gemini-1.5-pro"},
+    {"provider": "xai", "model": "grok-2-latest"},
+    {"provider": "xai", "model": "grok-2-vision-latest"},
+    {"provider": "xai", "model": "grok-beta"},
 ]
 
 

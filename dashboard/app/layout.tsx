@@ -5,6 +5,7 @@ import { DaemonBanner } from "@/components/DaemonBanner";
 import { CommandPalette } from "@/components/CommandPalette";
 import { NotificationBell } from "@/components/NotificationBell";
 import { MoodOrb } from "@/components/MoodOrb";
+import { ModelSwitcher } from "@/components/ModelSwitcher";
 import { DaemonProvider } from "@/lib/daemon";
 
 export const metadata: Metadata = {
@@ -49,6 +50,8 @@ export default function RootLayout({
                 <header className="sticky top-0 z-30 flex items-center gap-3 border-b border-white/[0.06] bg-ink-950/70 px-4 py-2.5 backdrop-blur-xl lg:px-10">
                   <MobileNav />
                   <div className="ml-auto flex items-center gap-2">
+                    {/* One-click switcher for the active provider/model. */}
+                    <ModelSwitcher />
                     {/* Live "mood" orb — reflects idle / thinking / alert. */}
                     <MoodOrb />
                     <NotificationBell />
