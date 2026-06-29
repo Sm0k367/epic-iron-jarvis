@@ -8,12 +8,16 @@ global < project < agent).
 
 from __future__ import annotations
 
+import logging
+import os
 import tomllib
 from pathlib import Path
 from typing import Any
 
 import tomli_w
 from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+_log = logging.getLogger("iron_jarvis.config")
 
 
 def default_permissions() -> dict[str, str]:
@@ -237,8 +241,36 @@ def _deep_merge(base: dict[str, Any], overlay: dict[str, Any]) -> dict[str, Any]
 def _read_toml(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
-    with path.open("rb") as fh:
-        return tomllib.load(fh)
+    try:
+        with path.open("rb") as fh:
+            return tomllib.load(fh)
+    except (tomllib.TOMLDecodeError, OSError) as exc:
+        # A torn/corrupt config (e.g. a crash mid-write) must NOT abort boot —
+        # fall back to defaults loudly so the daemon still starts and can be fixed
+        # from within the app, instead of being wedged before it can self-correct.
+        _log.error("ignoring unreadable config %s: %s", path, exc)
+        return {}
+
+
+def atomic_write_toml(path: Path, doc: dict[str, Any]) -> None:
+    """Write ``doc`` to ``path`` crash-safely: dump to a sibling temp then
+    ``os.replace`` (atomic on the same filesystem). A power loss mid-write leaves
+    either the old file or the new one — never a truncated config that bricks boot.
+    ``None`` values are dropped (TOML has no null)."""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    with tmp.open("wb") as fh:
+        tomli_w.dump({k: v for k, v in doc.items() if v is not None}, fh)
+    os.replace(tmp, path)
+
+
+def persist_config_values(home: str | Path, values: dict[str, Any]) -> None:
+    """Merge ``values`` into ``<home>/config.toml`` atomically (restart-safe)."""
+    path = Path(home) / "config.toml"
+    doc = _read_toml(path)
+    doc.update(values)
+    atomic_write_toml(path, doc)
 
 
 def global_config_path() -> Path:

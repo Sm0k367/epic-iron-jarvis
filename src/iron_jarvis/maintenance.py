@@ -80,14 +80,21 @@ def prune_backups(backups_dir: Path, keep: int) -> int:
     return removed
 
 
-def run_auto_backup(home: Path, *, engine=None, keep: int = 7) -> Path:
+def run_auto_backup(
+    home: Path, *, engine=None, keep: int = 7, include_keys: bool = True
+) -> Path:
     """Write a timestamped snapshot under ``<home>/backups`` and prune to ``keep``.
-    Keys are never included (an automatic backup is for data recovery, not key
-    escrow). Returns the archive path."""
+
+    Keys are INCLUDED by default: a local automatic backup is the disaster-recovery
+    net, and a snapshot that omits the Fernet keys silently fails its one job —
+    restoring it regenerates a fresh key that cannot decrypt any stored secret, so
+    every API key / OAuth login is lost while the UI still shows them "present".
+    The home is already local + private; pass ``include_keys=False`` only for a
+    portable export you intend to move off-machine. Returns the archive path."""
     home = Path(home)
     backups_dir = home / BACKUP_DIRNAME
     stamp = utcnow().strftime("%Y%m%d-%H%M%S")
     out = backups_dir / f"ironjarvis-backup-{stamp}.tar.gz"
-    create_backup(home, out, engine=engine, include_keys=False)
+    create_backup(home, out, engine=engine, include_keys=include_keys)
     prune_backups(backups_dir, keep)
     return out

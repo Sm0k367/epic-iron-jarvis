@@ -18,10 +18,13 @@ from sqlmodel import select
 
 from ..core.db import session_scope
 from ..core.ids import utcnow
+from ..core.logging import get_logger
 from .models import SecretRecord
 
 #: Recognised secret kinds (free-form ``kind`` is allowed; these are the canon).
 KINDS = ("api_key", "oauth", "token", "password", "generic")
+
+_log = get_logger("secrets")
 
 
 class SecretsManager:
@@ -42,8 +45,44 @@ class SecretsManager:
     def _fernet(self) -> Fernet:
         key_path = self.root / ".secrets.key"
         if not key_path.exists():
+            # First run (no key, no secrets) → generate. But if encrypted secrets
+            # ALREADY exist while the key is gone (e.g. a key-less restore), a new
+            # key can't decrypt them — generating silently masks the loss. We still
+            # generate so the daemon BOOTS (never brick the process the user needs
+            # to recover from), but log loudly; the lost state is then surfaced by
+            # ``key_valid()`` / the /diagnostics ``secrets_key_valid`` flag.
+            if self._has_secret_rows():
+                _log.error(
+                    "secrets key %s is MISSING but encrypted secrets exist — "
+                    "generating a new key; stored credentials cannot be decrypted "
+                    "until the original .secrets.key is restored (re-enter keys to "
+                    "fix). See /diagnostics secrets_key_valid.",
+                    key_path,
+                )
             key_path.write_bytes(Fernet.generate_key())
         return Fernet(key_path.read_bytes())
+
+    def _has_secret_rows(self) -> bool:
+        with session_scope(self.engine) as db:
+            return db.exec(select(SecretRecord).limit(1)).first() is not None
+
+    def key_valid(self) -> bool:
+        """True if the stored key can actually decrypt an existing secret.
+
+        Returns True when there are no secrets yet (nothing to validate). A real
+        trial-decrypt of one row catches the lost/mismatched-key condition that
+        ``.secrets.key`` *existence* alone cannot — the one signal that reveals a
+        key-less restore (vs. a freshly regenerated wrong key reading as present)."""
+        with session_scope(self.engine) as db:
+            row = db.exec(select(SecretRecord).limit(1)).first()
+            enc = row.enc_value if row is not None else None
+        if enc is None:
+            return True
+        try:
+            self._decrypt(enc)
+            return True
+        except Exception:  # noqa: BLE001 — InvalidToken (or any decrypt failure)
+            return False
 
     def _encrypt(self, value: str) -> str:
         return self._fernet().encrypt(value.encode("utf-8")).decode("utf-8")
