@@ -337,6 +337,42 @@ def test_cors_allows_patch_preflight(tmp_path):
     assert resp.status_code == 200  # 400 "Disallowed CORS method" before the fix
 
 
+# --- Convergence round 3: fail-closed + trust fixes ---------------------------
+
+
+def test_computeruse_approval_unknown_id_404(tmp_path):
+    # Approving/denying a non-existent approval must 404, not fake success.
+    client = TestClient(create_app(str(tmp_path)))
+    assert client.post("/computeruse/approvals/ghost/approve").status_code == 404
+    assert client.post("/computeruse/approvals/ghost/deny").status_code == 404
+
+
+def test_update_goal_rejects_unknown_status(platform):
+    g = platform.intent.add_goal("test goal")
+    rec = platform.intent.update_goal(g.id, status="bogus")
+    assert rec.status != "bogus"  # invalid status dropped (goal stays visible)
+    rec2 = platform.intent.update_goal(g.id, status="paused")
+    assert rec2.status == "paused"  # a valid status still applies
+
+
+def test_oauth_expiry_has_skew_leeway():
+    from datetime import timedelta
+
+    from iron_jarvis.connections.registry import _is_expired
+    from iron_jarvis.core.ids import utcnow
+
+    soon = (utcnow() + timedelta(seconds=30)).isoformat()
+    assert _is_expired({"expires_at": soon}) is True  # within the 60s leeway → refresh
+    later = (utcnow() + timedelta(seconds=600)).isoformat()
+    assert _is_expired({"expires_at": later}) is False
+
+
+def test_unknown_schedule_run_is_400_not_500(tmp_path):
+    # A routine ValueError (unknown task) is mapped to a clean 400, not a 500.
+    client = TestClient(create_app(str(tmp_path)))
+    assert client.post("/schedules/does-not-exist/run").status_code == 400
+
+
 # --- Convergence round 1: workflow scheduling, MCP timeout, rehydration -------
 
 

@@ -454,6 +454,11 @@ def _loads_list(raw: str) -> list:
     return value if isinstance(value, list) else []
 
 
+#: Refresh an OAuth token this many seconds BEFORE its hard expiry, to absorb
+#: clock skew and avoid a 401 on a request that straddles the expiry boundary.
+_EXPIRY_LEEWAY = timedelta(seconds=60)
+
+
 def _is_expired(token: dict) -> bool:
     exp = token.get("expires_at")
     if not exp:
@@ -464,7 +469,7 @@ def _is_expired(token: dict) -> bool:
         return False
     if dt.tzinfo is None:
         dt = dt.replace(tzinfo=timezone.utc)
-    return utcnow() >= dt
+    return utcnow() >= (dt - _EXPIRY_LEEWAY)
 
 
 def _close(http) -> None:

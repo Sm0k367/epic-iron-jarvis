@@ -599,20 +599,26 @@ def create_app(project_root: str | None = None) -> FastAPI:
     # cross-origin browser requests (drive-by RCE) before anything — covers WS.
     app.add_middleware(HostOriginGuardMiddleware)
 
-    # Global exception handler: an endpoint that raises an UNHANDLED error (e.g.
-    # malformed workflow TOML, a bad JSON body that escaped validation) should
-    # return a clean, actionable message — input/parse errors as 400, everything
-    # else as a logged 500 — instead of an opaque "Internal Server Error".
-    # HTTPException keeps its own handler (this only catches what falls through).
+    # Exception handling: an endpoint that raises an UNHANDLED error should return
+    # a clean, actionable message — input/parse errors as 400, everything else as a
+    # logged 500 — instead of an opaque "Internal Server Error". The input-error
+    # types are registered as SPECIFIC handlers so they're served by Starlette's
+    # ExceptionMiddleware WITHOUT an ERROR-level "Exception in ASGI application"
+    # traceback (a routine bad-TOML/unknown-name 400 shouldn't spam the log); only
+    # genuinely-unexpected exceptions hit the Exception handler + log.exception.
+    import json as _json
+    import tomllib as _tomllib
+
     from fastapi.responses import JSONResponse
+
+    async def _input_error(request: Request, exc: Exception):  # noqa: ANN202
+        return JSONResponse(status_code=400, content={"detail": f"{type(exc).__name__}: {exc}"})
+
+    for _exc_type in (ValueError, KeyError, _tomllib.TOMLDecodeError, _json.JSONDecodeError):
+        app.add_exception_handler(_exc_type, _input_error)
 
     @app.exception_handler(Exception)
     async def _unhandled(request: Request, exc: Exception):  # noqa: ANN202
-        import json as _json
-        import tomllib as _tomllib
-
-        if isinstance(exc, (ValueError, KeyError, _tomllib.TOMLDecodeError, _json.JSONDecodeError)):
-            return JSONResponse(status_code=400, content={"detail": f"{type(exc).__name__}: {exc}"})
         log.exception("unhandled error on %s %s", request.method, request.url.path)
         return JSONResponse(
             status_code=500,
@@ -1313,12 +1319,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     @app.post("/computeruse/approvals/{approval_id}/approve")
     def computeruse_approve(approval_id: str) -> dict[str, Any]:
-        platform.computeruse.approvals.approve(approval_id)
+        # 404 on an unknown/stale id instead of faking success — for a
+        # human-gated capability, a "approved" reply that recorded nothing is a
+        # trust lie (mirrors every other id-based mutation).
+        if platform.computeruse.approvals.approve(approval_id) is None:
+            raise HTTPException(status_code=404, detail="no such approval")
         return {"id": approval_id, "status": "approved"}
 
     @app.post("/computeruse/approvals/{approval_id}/deny")
     def computeruse_deny(approval_id: str) -> dict[str, Any]:
-        platform.computeruse.approvals.deny(approval_id)
+        if platform.computeruse.approvals.deny(approval_id) is None:
+            raise HTTPException(status_code=404, detail="no such approval")
         return {"id": approval_id, "status": "denied"}
 
     @app.get("/computeruse/runs/{run_id}")

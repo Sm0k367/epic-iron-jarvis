@@ -147,6 +147,10 @@ class IntentEngine:
                     continue
                 if key == "autonomy_level" and value not in AUTONOMY_LEVELS:
                     continue
+                # Reject an unknown status (would drop the goal from every
+                # list_goals(status=...) filter and make it vanish from the UI).
+                if key == "status" and value not in ("active", "paused", "done", "abandoned"):
+                    continue
                 if key == "priority":
                     value = max(1, min(5, int(value)))
                 setattr(rec, key, value)
