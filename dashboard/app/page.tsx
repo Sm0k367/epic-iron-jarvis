@@ -44,6 +44,7 @@ type Diagnostics = {
   running_sessions?: number;
   pending_reviews?: number;
   tracked_worktrees?: number;
+  background_loops?: Record<string, { ok?: boolean; error?: string }>;
 };
 
 function fmtBytes(b?: number): string {
@@ -332,6 +333,17 @@ export default function OverviewPage() {
                 value={String(diag.data.tracked_worktrees ?? 0)}
                 status="neutral"
               />
+              {(() => {
+                const loops = diag.data.background_loops ?? {};
+                const bad = Object.entries(loops).filter(([, v]) => v && v.ok === false);
+                return (
+                  <HealthItem
+                    label="Boot loops"
+                    value={bad.length ? `${bad.length} failed` : "ok"}
+                    status={bad.length ? "bad" : "ok"}
+                  />
+                );
+              })()}
             </div>
           ) : (
             <Empty icon={<HeartPulse size={22} />}>No diagnostics available.</Empty>

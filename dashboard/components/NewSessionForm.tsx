@@ -59,13 +59,8 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
   const { data: modelsData } = useApi<{ models: ModelOption[] }>("/models");
   const { data: health } = useApi<Health>("/health");
   const { data: agentsData } = useApi<{ builtin: string[]; dynamic: { name: string }[] }>("/agents");
-  const agentTypes = (() => {
-    const names = [
-      ...(agentsData?.builtin ?? []),
-      ...(agentsData?.dynamic ?? []).map((d) => d.name),
-    ];
-    return names.length ? names : FALLBACK_AGENTS;
-  })();
+  const builtinAgents = agentsData?.builtin ?? FALLBACK_AGENTS;
+  const dynamicAgents = (agentsData?.dynamic ?? []).map((d) => d.name);
 
   const [task, setTask] = useState("");
   const [agentType, setAgentType] = useState("builder");
@@ -153,15 +148,23 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
     setError(null);
     const [provider, model] = choice ? choice.split("|") : ["", ""];
     try {
-      // wait:false — the session starts and we jump to its detail page so the
-      // user watches it run live (and can cancel it).
-      const session = await post<SessionView>("/sessions", {
-        task: task.trim(),
-        agent_type: agentType,
-        provider: provider || undefined,
-        model: model || undefined,
-        wait: false,
-      });
+      // A DYNAMIC (user-created) agent isn't an AgentType the /sessions runner can
+      // resolve — POST /sessions would silently downgrade it to Builder. Route it
+      // through its real definition via /agents/{name}/spawn instead.
+      const isDynamic = dynamicAgents.includes(agentType);
+      const session = isDynamic
+        ? await post<SessionView>(`/agents/${encodeURIComponent(agentType)}/spawn`, {
+            task: task.trim(),
+          })
+        : // wait:false — the session starts and we jump to its detail page so the
+          // user watches it run live (and can cancel it).
+          await post<SessionView>("/sessions", {
+            task: task.trim(),
+            agent_type: agentType,
+            provider: provider || undefined,
+            model: model || undefined,
+            wait: false,
+          });
       setTask("");
       setAttachedName(null);
       onCreated?.();
@@ -248,9 +251,14 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
             onChange={(e) => setAgentType(e.target.value)}
             className="field"
           >
-            {agentTypes.map((t) => (
+            {builtinAgents.map((t) => (
               <option key={t} value={t}>
                 {t}
+              </option>
+            ))}
+            {dynamicAgents.map((t) => (
+              <option key={t} value={t}>
+                {t} (custom)
               </option>
             ))}
           </select>
