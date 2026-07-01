@@ -61,7 +61,10 @@ if ($Publish -and $ver -ne $pyVer) {
 $PkgJson = Join-Path $Desktop "package.json"
 $pkgText = Get-Content $PkgJson -Raw
 $pkgText = $pkgText -replace '("version":\s*")[^"]+(")', "`${1}$ver`${2}"
-Set-Content -Path $PkgJson -Value $pkgText -Encoding utf8 -NoNewline
+# Write WITHOUT a BOM: Windows PowerShell 5.1's `Set-Content -Encoding utf8`
+# prepends EF BB BF, which corrupts package.json for strict JSON parsers (and the
+# version-drift test). UTF8Encoding($false) = no BOM.
+[IO.File]::WriteAllText($PkgJson, $pkgText, (New-Object Text.UTF8Encoding($false)))
 Write-Host "    desktop/package.json version = $ver (pyproject $pyVer)" -ForegroundColor Green
 
 # 1) Freeze the daemon -----------------------------------------------------

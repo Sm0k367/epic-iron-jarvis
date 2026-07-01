@@ -114,6 +114,10 @@ def check_uv() -> dict:
         if ok
         else "Install uv: https://docs.astral.sh/uv/ "
         "(PowerShell: `irm https://astral.sh/uv/install.ps1 | iex`).",
+        # RECOMMENDED, not REQUIRED: uv is a source/dev tool (self-update, repair).
+        # A packaged/frozen install ships its own runtime and runs fine without it,
+        # so a missing uv must NOT make the app's self-diagnosis report "broken".
+        level=RECOMMENDED,
     )
 
 

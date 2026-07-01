@@ -221,19 +221,38 @@ function waitForDaemon(timeoutMs, intervalMs) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     const attempt = () => {
+      // Fail FAST if the daemon child already exited — e.g. serve()'s preflight
+      // found a foreign program on the port and exited non-zero. Don't wait 30s.
+      if (daemonProc && daemonProc.exitCode !== null && daemonProc.exitCode !== 0) {
+        return reject(new Error(`daemon exited early (code ${daemonProc.exitCode}) — port in use?`));
+      }
       const req = http.get(
         `http://127.0.0.1:${DAEMON_PORT}/health`,
         { headers: authToken ? { Authorization: `Bearer ${authToken}` } : {} },
         (res) => {
-          res.resume();
-          if (res.statusCode === 200) resolve();
-          else retry();
+          let body = "";
+          res.setEncoding("utf8");
+          res.on("data", (c) => (body += c));
+          res.on("end", () => {
+            // Require OUR daemon's health shape, not just any 200 — a foreign
+            // server squatting on the baked port must not pass the gate.
+            let ok = false;
+            if (res.statusCode === 200) {
+              try {
+                const d = JSON.parse(body);
+                ok = d && d.status === "ok" && !!d.version;
+              } catch {
+                ok = false;
+              }
+            }
+            ok ? resolve() : retry();
+          });
         }
       );
       req.on("error", retry);
       req.setTimeout(2500, () => req.destroy(new Error("probe timeout")));
       function retry() {
-        if (Date.now() >= deadline) reject(new Error(`daemon /health not 200 within ${timeoutMs}ms`));
+        if (Date.now() >= deadline) reject(new Error(`daemon /health not healthy within ${timeoutMs}ms`));
         else setTimeout(attempt, intervalMs);
       }
     };

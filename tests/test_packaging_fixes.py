@@ -67,3 +67,17 @@ def test_desktop_version_matches_pyproject():
     py = tomllib.loads((_ROOT / "pyproject.toml").read_text())["project"]["version"]
     desk = json.loads((_ROOT / "desktop" / "package.json").read_text())["version"]
     assert desk == py, f"version drift: desktop {desk} != pyproject {py}"
+
+
+def test_desktop_package_json_has_no_bom():
+    # IJPKG-R1-02: the build-installer version stamp must not prepend a UTF-8 BOM
+    # (which breaks strict JSON parsers and the drift guard above).
+    assert (_ROOT / "desktop" / "package.json").read_bytes()[:3] != b"\xef\xbb\xbf"
+
+
+def test_uv_check_is_recommended_not_required():
+    # PKG-2: uv is a source/dev tool; a frozen install runs without it, so a
+    # missing uv must NOT make the app's self-diagnosis report "broken".
+    from iron_jarvis.onboarding.doctor import RECOMMENDED, check_uv
+
+    assert check_uv()["level"] == RECOMMENDED
