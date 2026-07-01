@@ -8,9 +8,18 @@
 //   3. Shows a dark "Starting Iron Jarvis…" splash while polling the dashboard.
 //   4. When the dashboard answers, opens the real window (size/pos restored from
 //      window-state.json) on http://localhost:<DASHBOARD_PORT>.
-//   5. ALWAYS-ON: closing the window HIDES it to a system tray; the daemon +
-//      dashboard keep running so the scheduler/cron/webhooks survive for weeks.
-//      Only an explicit Quit (tray menu / app.quit) tears the children down.
+//   5. CLOSE BEHAVIOR (user-controlled): closing the window can either hide to a
+//      system tray (daemon + dashboard keep running so scheduler/cron/webhooks
+//      survive) or fully quit. The choice is a persisted preference
+//      (desktop-settings.json); when unset, the first close prompts the user
+//      (default: quit) and can remember the answer. A checkable "Keep running in
+//      background" item in the tray + app menu flips it any time.
+//   6. RELIABILITY: child stdout/stderr is teed to rotating log files under
+//      userData/logs (a Start-Menu launch has no console — without this, failures
+//      are undiagnosable); crashed children auto-restart with backoff and notify
+//      after repeated failures; Quit asks the daemon to exit gracefully (POST
+//      /shutdown) before force-killing; updates re-check periodically, not just
+//      at boot; optional start-at-login boots hidden to the tray (--hidden).
 //
 // The repo (daemon + ./dashboard) is expected one directory above this file.
 
@@ -25,6 +34,7 @@ const {
   session,
   screen,
   nativeImage,
+  Notification,
 } = require("electron");
 const { spawn, spawnSync } = require("child_process");
 const crypto = require("crypto");
@@ -52,13 +62,22 @@ const DASHBOARD_SERVER = path.join(RES_DIR, "dashboard", "server.js");
 // The dashboard's API base (NEXT_PUBLIC_IJ_API) is baked at build time to
 // 127.0.0.1:8787, so the bundled daemon MUST listen on 8787.
 const DAEMON_PORT = parseInt(process.env.IJ_DAEMON_PORT || "8787", 10);
-const DASHBOARD_PORT = parseInt(process.env.IJ_DASHBOARD_PORT || "3000", 10);
+// 8788 (next to the daemon's 8787), NOT 3000: every Next/CRA dev server on the
+// machine defaults to 3000, and a foreign app squatting there would break Iron
+// Jarvis. The daemon's Host/Origin guard + CORS trust any loopback origin, so
+// the port choice needs no daemon-side allowlist change.
+const DASHBOARD_PORT = parseInt(process.env.IJ_DASHBOARD_PORT || "8788", 10);
 
 const DASHBOARD_URL = `http://localhost:${DASHBOARD_PORT}`;
 const DASHBOARD_PROBE_URL = `http://127.0.0.1:${DASHBOARD_PORT}/`;
-const STARTUP_TIMEOUT_MS = 30000;
+// Packaged cold boots are slow the first time (AV scans the PyInstaller-frozen
+// daemon exe) — give them 90s; dev keeps the tight 30s feedback loop.
+const STARTUP_TIMEOUT_MS = IS_PACKAGED ? 90000 : 30000;
 
 const HOTKEY = "CommandOrControl+Shift+J";
+
+// --hidden: boot straight to the tray with no window (start-at-login mode).
+const START_HIDDEN = process.argv.includes("--hidden");
 
 // --- State ---------------------------------------------------------------
 
@@ -74,6 +93,15 @@ let isQuitting = false;
 let authToken = null; // per-install bearer token (also passed to the daemon)
 let userDataDir = null; // app.getPath('userData') — set once app is ready
 let saveBoundsTimer = null; // debounce timer for window-state writes
+// What a window close does: true = keep running (hide to tray), false = fully
+// quit, null = not chosen yet (prompt on close). Persisted to
+// desktop-settings.json; the fresh-install default is "quit".
+let keepRunningPref = null;
+// Set once both children pass their health gates — lets a second launch (or the
+// tray) reopen the window after a --hidden boot that never created one.
+let bootComplete = false;
+// before-quit runs async teardown (graceful daemon stop) exactly once.
+let quitProcessed = false;
 
 // --- Per-install auth token ---------------------------------------------
 // The local daemon is RCE-by-design; a token blocks drive-by requests from any
@@ -113,7 +141,14 @@ function installAuthHeaderInjection() {
   try {
     session.defaultSession.webRequest.onBeforeSendHeaders(filter, (details, callback) => {
       const headers = details.requestHeaders || {};
-      if (!headers.Authorization && !headers.authorization) {
+      // SCOPE: the pattern above matches ANY loopback port (Electron rejects
+      // ports in match patterns), but the bearer token must ONLY ever reach
+      // OUR daemon — attaching it to some other local app's port leaks it.
+      const url = details.url || "";
+      const isDaemon =
+        url.startsWith(`http://127.0.0.1:${DAEMON_PORT}/`) ||
+        url.startsWith(`http://localhost:${DAEMON_PORT}/`);
+      if (isDaemon && !headers.Authorization && !headers.authorization) {
         headers.Authorization = `Bearer ${authToken}`;
       }
       callback({ requestHeaders: headers });
@@ -123,6 +158,136 @@ function installAuthHeaderInjection() {
     // Never let this stop the app from booting the daemon + dashboard.
     console.error("[auth] header injection unavailable:", err && err.message);
   }
+}
+
+// --- Desktop settings: close-to-tray preference -------------------------
+// "Keep running in background" is user-controlled and persisted next to the
+// other per-install state (token.txt, window-state.json). An absent/invalid
+// file means "undecided" -> the window-close handler prompts once (default:
+// quit) and can remember the answer.
+
+function desktopSettingsFile() {
+  return path.join(userDataDir, "desktop-settings.json");
+}
+
+function loadDesktopSettings() {
+  try {
+    const raw = JSON.parse(fs.readFileSync(desktopSettingsFile(), "utf8"));
+    keepRunningPref =
+      raw && typeof raw.keepRunningInBackground === "boolean"
+        ? raw.keepRunningInBackground
+        : null;
+  } catch {
+    keepRunningPref = null; // not created yet -> undecided
+  }
+}
+
+function setKeepRunningPref(value) {
+  keepRunningPref = !!value;
+  try {
+    fs.writeFileSync(
+      desktopSettingsFile(),
+      JSON.stringify({ keepRunningInBackground: keepRunningPref }),
+      "utf8"
+    );
+  } catch (err) {
+    console.error("[settings] could not persist desktop-settings.json:", err && err.message);
+  }
+  refreshMenus(); // reflect the new state in the tray + app-menu checkboxes
+}
+
+// Hide the window to the tray, keeping the daemon + dashboard alive.
+// MEMORY: a hidden BrowserWindow keeps its whole renderer tree resident
+// (~hundreds of MB) — destroy it after hiding and let showMainWindow() rebuild
+// it on demand. hide() first so the visual response is instant; destroy() (not
+// close()) skips the 'close' handler, so no prompt/recursion.
+function hideToTray() {
+  if (!mainWin || mainWin.isDestroyed()) return;
+  flushWindowState();
+  if (mainWin.isFullScreen()) mainWin.setFullScreen(false);
+  const win = mainWin;
+  win.hide();
+  setImmediate(() => {
+    try {
+      if (!win.isDestroyed()) win.destroy(); // fires 'closed' -> mainWin = null
+    } catch {
+      /* already gone */
+    }
+  });
+}
+
+// --- Start at login --------------------------------------------------------
+// A daily driver with "keep running in background" wants to survive reboots.
+// Packaged builds only: in dev the login item would point at electron.exe and
+// leave junk startup entries behind.
+
+function getStartAtLogin() {
+  try {
+    return app.getLoginItemSettings().openAtLogin;
+  } catch {
+    return false;
+  }
+}
+
+function setStartAtLogin(enabled) {
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: !!enabled,
+      args: ["--hidden"], // boot straight to the tray, no window flash at login
+    });
+  } catch (err) {
+    console.error("[login-item] could not update:", err && err.message);
+  }
+  refreshMenus();
+}
+
+// --- Child log files ------------------------------------------------------
+// A Start-Menu launch has NO console: without a file sink every [daemon] /
+// [dashboard] line is lost and a 2am failure is undiagnosable. Each child gets
+// userData/logs/<label>.log with a simple size rotation (current + .1).
+
+const LOG_MAX_BYTES = 5 * 1024 * 1024;
+const _fileLoggers = {}; // label -> write(chunk)
+
+function fileLogger(label) {
+  if (_fileLoggers[label]) return _fileLoggers[label];
+  let stream = null;
+  let size = 0;
+  let logPath = null;
+  const write = (chunk) => {
+    // Logging must never break the app — swallow every fs error.
+    try {
+      if (!stream) {
+        const dir = path.join(userDataDir, "logs");
+        fs.mkdirSync(dir, { recursive: true });
+        logPath = path.join(dir, `${label}.log`);
+        try {
+          size = fs.statSync(logPath).size;
+        } catch {
+          size = 0;
+        }
+        stream = fs.createWriteStream(logPath, { flags: "a" });
+      }
+      if (size > LOG_MAX_BYTES) {
+        try {
+          stream.end();
+          fs.rmSync(`${logPath}.1`, { force: true });
+          fs.renameSync(logPath, `${logPath}.1`);
+        } catch {
+          /* rotation is best-effort */
+        }
+        size = 0;
+        stream = fs.createWriteStream(logPath, { flags: "a" });
+      }
+      const s = String(chunk);
+      size += Buffer.byteLength(s);
+      stream.write(s);
+    } catch {
+      /* never throw from a logger */
+    }
+  };
+  _fileLoggers[label] = write;
+  return write;
 }
 
 // --- Child process helpers ----------------------------------------------
@@ -137,23 +302,82 @@ function spawnChild(label, command, args, cwd, extraEnv, useShell = true) {
     env: { ...process.env, ...(extraEnv || {}) },
   });
 
+  const toFile = fileLogger(label);
   if (child.stdout) {
-    child.stdout.on("data", (d) => process.stdout.write(`[${label}] ${d}`));
+    child.stdout.on("data", (d) => {
+      process.stdout.write(`[${label}] ${d}`);
+      toFile(d);
+    });
   }
   if (child.stderr) {
-    child.stderr.on("data", (d) => process.stderr.write(`[${label}] ${d}`));
+    child.stderr.on("data", (d) => {
+      process.stderr.write(`[${label}] ${d}`);
+      toFile(d);
+    });
   }
   child.on("error", (err) => {
     // With shell:true the inner command (uv/pnpm) won't raise ENOENT here —
     // that's covered by the preflight check below. This catches shell failures.
     console.error(`[${label}] spawn error:`, err.message);
+    toFile(`[main] spawn error: ${err.message}\n`);
   });
   child.on("exit", (code, signal) => {
     console.log(`[${label}] exited (code=${code}, signal=${signal}, pid=${child.pid})`);
+    toFile(`[main] exited (code=${code}, signal=${signal}, pid=${child.pid})\n`);
   });
 
   console.log(`[${label}] started pid=${child.pid}: ${command} ${args.join(" ")} (cwd=${cwd})`);
+  toFile(`[main] ${new Date().toISOString()} started pid=${child.pid}: ${command} ${args.join(" ")}\n`);
   return child;
+}
+
+// --- Crash supervisor -----------------------------------------------------
+// A daemon that dies at 2am while hidden in the tray must NOT stay dead with
+// the tray still claiming "running" — schedules/webhooks would be silently off
+// until a manual relaunch. Unexpected exits restart with backoff; repeated
+// fast crashes surface a notification instead of looping forever silently.
+
+const RESTART_BACKOFF_MS = [1000, 5000, 15000, 60000];
+const _services = {}; // label -> { spawnFn, restarts, lastStart }
+
+function startService(label, spawnFn) {
+  const rec = _services[label] || (_services[label] = { restarts: 0, lastStart: 0 });
+  rec.spawnFn = spawnFn;
+  rec.lastStart = Date.now();
+  const child = spawnFn();
+  if (label === "daemon") daemonProc = child;
+  else if (label === "dashboard") dashboardProc = child;
+  child.on("exit", () => {
+    if (shuttingDown || isQuitting) return; // expected teardown
+    const uptime = Date.now() - rec.lastStart;
+    if (uptime > 5 * 60 * 1000) rec.restarts = 0; // ran healthy — reset the ladder
+    rec.restarts += 1;
+    const delay = RESTART_BACKOFF_MS[Math.min(rec.restarts - 1, RESTART_BACKOFF_MS.length - 1)];
+    console.error(`[${label}] unexpected exit — restart #${rec.restarts} in ${delay}ms`);
+    fileLogger(label)(`[main] unexpected exit — restart #${rec.restarts} in ${delay}ms\n`);
+    if (rec.restarts === 3) notifyCrashLoop(label);
+    setTimeout(() => {
+      if (!shuttingDown && !isQuitting) startService(label, rec.spawnFn);
+    }, delay);
+  });
+  return child;
+}
+
+function notifyCrashLoop(label) {
+  const logsDir = path.join(userDataDir || "", "logs");
+  try {
+    if (tray) tray.setToolTip(`Iron Jarvis — ${label} is restarting repeatedly (check logs)`);
+  } catch {
+    /* tray may be gone */
+  }
+  try {
+    new Notification({
+      title: "Iron Jarvis — problem",
+      body: `The ${label} keeps crashing and is being restarted. Logs: ${logsDir}`,
+    }).show();
+  } catch {
+    /* notifications unavailable */
+  }
 }
 
 // Resolve whether a command is on PATH (so we can show a friendly dialog
@@ -196,23 +420,82 @@ function shutdown() {
   killChild(dashboardProc, "dashboard");
 }
 
+// Ask the daemon to exit cleanly (POST /shutdown -> uvicorn SIGTERM -> lifespan
+// shutdown) and wait briefly for the process to die. Resolves true when it
+// exited by itself; false means the caller should force-kill. The auto-update
+// path deliberately SKIPS this and calls shutdown() synchronously — NSIS needs
+// the process tree dead before it returns.
+function requestDaemonShutdown(timeoutMs) {
+  return new Promise((resolve) => {
+    if (!daemonProc || daemonProc.exitCode !== null || daemonProc.signalCode !== null) {
+      return resolve(true); // never started or already gone
+    }
+    try {
+      const req = http.request(
+        {
+          host: "127.0.0.1",
+          port: DAEMON_PORT,
+          path: "/shutdown",
+          method: "POST",
+          headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+        },
+        (res) => res.resume()
+      );
+      req.on("error", () => {
+        /* daemon not answering — the force-kill fallback covers it */
+      });
+      req.setTimeout(1000, () => req.destroy(new Error("shutdown request timeout")));
+      req.end();
+    } catch {
+      return resolve(false);
+    }
+    const deadline = Date.now() + timeoutMs;
+    const timer = setInterval(() => {
+      const gone =
+        !daemonProc || daemonProc.exitCode !== null || daemonProc.signalCode !== null;
+      if (gone || Date.now() >= deadline) {
+        clearInterval(timer);
+        resolve(gone);
+      }
+    }, 100);
+  });
+}
+
 // --- Dashboard readiness polling ----------------------------------------
+// Like the daemon gate below, this must not be fooled by a FOREIGN server on
+// the port: "any HTTP response" would happily load someone else's app into the
+// Iron Jarvis window. Require the dashboard's own marker (its <title>) in the
+// response body before declaring ready.
 
 function waitForDashboard(timeoutMs, intervalMs) {
   const deadline = Date.now() + timeoutMs;
   return new Promise((resolve, reject) => {
     const attempt = () => {
-      const req = http.get(DASHBOARD_PROBE_URL, (res) => {
-        res.resume(); // drain
-        resolve(); // any HTTP response means the server is listening
-      });
-      req.on("error", () => {
+      const retry = (why) => {
         if (Date.now() >= deadline) {
-          reject(new Error(`dashboard did not respond within ${timeoutMs}ms`));
+          reject(
+            new Error(
+              `dashboard did not answer with the Iron Jarvis app within ${timeoutMs}ms` +
+                (why ? ` (${why})` : "")
+            )
+          );
         } else {
           setTimeout(attempt, intervalMs);
         }
+      };
+      const req = http.get(DASHBOARD_PROBE_URL, (res) => {
+        let body = "";
+        res.setEncoding("utf8");
+        res.on("data", (c) => {
+          if (body.length < 256 * 1024) body += c; // cap: the marker is in <head>
+        });
+        res.on("end", () => {
+          if (/iron\s*jarvis/i.test(body)) resolve();
+          else retry("a different app answered on this port");
+        });
+        res.on("error", () => retry());
       });
+      req.on("error", () => retry());
       req.setTimeout(2500, () => req.destroy(new Error("probe timeout")));
     };
     attempt();
@@ -438,15 +721,61 @@ function createMainWindow() {
   mainWin.on("resize", scheduleSaveWindowState);
   mainWin.on("move", scheduleSaveWindowState);
 
-  // The reliability fix: a normal window close HIDES to the tray (keeping the
-  // daemon + dashboard alive). Only an explicit Quit (isQuitting) really closes.
+  // User-controlled close behavior. When the preference is set we honor it
+  // directly; when it's undecided we prompt once (default button = Quit, the
+  // fresh-install default) and optionally remember the answer. An explicit Quit
+  // (isQuitting, e.g. tray/app-menu Quit) always falls straight through.
   mainWin.on("close", (event) => {
     flushWindowState();
-    if (!isQuitting) {
+    if (isQuitting) return;
+
+    if (keepRunningPref === true) {
       event.preventDefault();
-      if (mainWin.isFullScreen()) mainWin.setFullScreen(false);
-      mainWin.hide();
+      hideToTray();
+      return;
     }
+    if (keepRunningPref === false) {
+      // Fully quit: let this close proceed; before-quit tears down the children.
+      isQuitting = true;
+      app.quit();
+      return;
+    }
+
+    // Undecided -> ask. Cancel the close now and act on the async answer. (The
+    // sync dialog can't return the checkbox state, so we use the async form and
+    // always preventDefault first, then hide/quit once the user responds.)
+    event.preventDefault();
+    dialog
+      .showMessageBox(mainWin, {
+        type: "question",
+        buttons: ["Keep running", "Quit completely"],
+        defaultId: 1, // Enter = Quit (the fresh-install default)
+        cancelId: 0, // Esc aborts the teardown (safe: keep running)
+        noLink: true,
+        title: "Close Iron Jarvis?",
+        message: "Keep Iron Jarvis running in the background?",
+        detail:
+          "Keeping it running lets schedules, cron jobs, and webhooks stay active " +
+          "while the window is closed. Quitting stops everything until you next open the app.",
+        checkboxLabel: "Remember my choice",
+        checkboxChecked: false,
+      })
+      .then(({ response, checkboxChecked }) => {
+        const keepRunning = response === 0;
+        if (checkboxChecked) setKeepRunningPref(keepRunning);
+        if (keepRunning) {
+          hideToTray();
+        } else {
+          isQuitting = true;
+          app.quit();
+        }
+      })
+      .catch((err) => {
+        // On a dialog failure don't tear anything down — hide to the tray; the
+        // user can still Quit explicitly from the tray/app menu.
+        console.error("[close] prompt failed:", err && err.message);
+        hideToTray();
+      });
   });
 
   mainWin.on("closed", () => {
@@ -471,9 +800,63 @@ function showMainWindow() {
 
 // --- System tray ---------------------------------------------------------
 
+// Built fresh each time so the "Keep running in background" checkbox reflects
+// the current preference (toggled from either menu or set by the close prompt).
+function buildTrayContextMenu() {
+  const template = [
+    { label: "Open Iron Jarvis", click: () => showMainWindow() },
+    { type: "separator" },
+    {
+      label: "Keep running in background",
+      type: "checkbox",
+      checked: keepRunningPref === true,
+      click: (item) => setKeepRunningPref(item.checked),
+    },
+  ];
+  if (IS_PACKAGED) {
+    template.push({
+      label: "Start at login",
+      type: "checkbox",
+      checked: getStartAtLogin(),
+      click: (item) => setStartAtLogin(item.checked),
+    });
+  }
+  template.push(
+    { type: "separator" },
+    {
+      label: "Quit Iron Jarvis",
+      click: () => {
+        isQuitting = true;
+        app.quit();
+      },
+    }
+  );
+  return Menu.buildFromTemplate(template);
+}
+
+function refreshTrayMenu() {
+  if (!tray) return;
+  try {
+    tray.setContextMenu(buildTrayContextMenu());
+  } catch (err) {
+    console.error("[tray] could not refresh menu:", err && err.message);
+  }
+}
+
+// Rebuild both menus so their "Keep running in background" checkboxes stay in
+// sync after a toggle (from either menu) or a close-prompt answer.
+function refreshMenus() {
+  buildMenu();
+  refreshTrayMenu();
+}
+
 function createTray() {
   if (tray) return;
-  const iconPath = path.join(__dirname, "assets", "icon.png");
+  // Windows renders tray icons crispest from .ico; fall back to the png.
+  const icoPath = path.join(__dirname, "assets", "icon.ico");
+  const iconPath = fs.existsSync(icoPath)
+    ? icoPath
+    : path.join(__dirname, "assets", "icon.png");
   let image;
   try {
     image = nativeImage.createFromPath(iconPath);
@@ -487,18 +870,7 @@ function createTray() {
     return;
   }
   tray.setToolTip("Iron Jarvis — running");
-  const menu = Menu.buildFromTemplate([
-    { label: "Open Iron Jarvis", click: () => showMainWindow() },
-    { type: "separator" },
-    {
-      label: "Quit Iron Jarvis",
-      click: () => {
-        isQuitting = true;
-        app.quit();
-      },
-    },
-  ]);
-  tray.setContextMenu(menu);
+  tray.setContextMenu(buildTrayContextMenu());
   // Left-click / double-click both reopen the window (idempotent).
   tray.on("click", () => showMainWindow());
   tray.on("double-click", () => showMainWindow());
@@ -509,29 +881,41 @@ function createTray() {
 // Updates page); a packaged installer self-updates from GitHub Releases via
 // electron-updater (publish config in package.json -> build.publish).
 
-function checkForUpdates() {
-  if (!IS_PACKAGED) return;
-  let autoUpdater;
+// A tray app can stay resident for WEEKS — checking only at boot means never
+// seeing an update. init once (listeners), then re-check every 12h.
+const UPDATE_RECHECK_MS = 12 * 60 * 60 * 1000;
+let _autoUpdater = null;
+
+function initUpdater() {
+  if (_autoUpdater || !IS_PACKAGED) return _autoUpdater;
   try {
-    ({ autoUpdater } = require("electron-updater"));
+    ({ autoUpdater: _autoUpdater } = require("electron-updater"));
   } catch (err) {
     console.error("[update] electron-updater unavailable:", err.message);
-    return;
+    return null;
   }
+  const autoUpdater = _autoUpdater;
   autoUpdater.autoDownload = true;
   autoUpdater.on("error", (err) => console.error("[update] error:", err && err.message));
   autoUpdater.on("update-available", (info) =>
     console.log("[update] available:", info && info.version)
   );
   autoUpdater.on("update-downloaded", (info) => {
-    const choice = dialog.showMessageBoxSync({
+    // Parent the dialog to a visible main window so it doesn't pop up behind
+    // everything; hidden-in-tray falls back to an unparented (top-level) dialog.
+    const opts = {
       type: "info",
       buttons: ["Restart now", "Later"],
       defaultId: 0,
       title: "Iron Jarvis — update ready",
       message: `Version ${info && info.version} has been downloaded.`,
       detail: "Restart to install the update.",
-    });
+    };
+    const parent =
+      mainWin && !mainWin.isDestroyed() && mainWin.isVisible() ? mainWin : null;
+    const choice = parent
+      ? dialog.showMessageBoxSync(parent, opts)
+      : dialog.showMessageBoxSync(opts);
     if (choice === 0) {
       isQuitting = true; // allow the window to actually close
       // Drop a recovery marker so the NEXT boot can detect a broken update.
@@ -544,6 +928,12 @@ function checkForUpdates() {
       autoUpdater.quitAndInstall(false, true);
     }
   });
+  return autoUpdater;
+}
+
+function checkForUpdates() {
+  const autoUpdater = initUpdater();
+  if (!autoUpdater) return;
   autoUpdater
     .checkForUpdatesAndNotify()
     .catch((err) => console.error("[update] check failed:", err && err.message));
@@ -557,6 +947,23 @@ function buildMenu() {
       label: "Iron Jarvis",
       submenu: [
         { label: "Open / Show Window", accelerator: HOTKEY, click: () => showMainWindow() },
+        { type: "separator" },
+        {
+          label: "Keep running in background when window is closed",
+          type: "checkbox",
+          checked: keepRunningPref === true,
+          click: (item) => setKeepRunningPref(item.checked),
+        },
+        ...(IS_PACKAGED
+          ? [
+              {
+                label: "Start at login (hidden in tray)",
+                type: "checkbox",
+                checked: getStartAtLogin(),
+                click: (item) => setStartAtLogin(item.checked),
+              },
+            ]
+          : []),
         { type: "separator" },
         { role: "reload" },
         { role: "forceReload" },
@@ -592,6 +999,10 @@ function buildMenu() {
 
 async function startup() {
   userDataDir = app.getPath("userData"); // writable per-user state dir
+  // Windows toast notifications (crash-loop, hotkey conflicts) need a stable
+  // AppUserModelID that matches the installer's appId.
+  app.setAppUserModelId("com.realdealcpa.ironjarvis");
+  loadDesktopSettings(); // load the close-to-tray preference before menus/tray
   authToken = getOrCreateToken();
   installAuthHeaderInjection();
   // If a just-applied update exists, bump its attempt count now; a clean boot
@@ -600,38 +1011,43 @@ async function startup() {
 
   buildMenu();
   createTray();
-  createLoadingWindow();
+  if (!START_HIDDEN) createLoadingWindow(); // login-boot goes straight to tray
   registerHotkey();
 
   if (IS_PACKAGED) {
     // PACKAGED: frozen daemon exe + standalone dashboard run by Electron's Node.
-    // No Python/uv/Node/pnpm required on the user's machine.
+    // No Python/uv/Node/pnpm required on the user's machine. Both children run
+    // under the crash supervisor (auto-restart with backoff).
     const stateDir = userDataDir; // the daemon's .ironjarvis lives here
     // 1) Frozen daemon. Must serve on 8787 to match the build-time-baked client URL.
-    daemonProc = spawnChild(
-      "daemon",
-      DAEMON_EXE,
-      ["serve", "--host", "127.0.0.1", "--port", String(DAEMON_PORT), "--root", stateDir],
-      path.dirname(DAEMON_EXE),
-      // Blank out any ambient IRONJARVIS_HOME (e.g. left over from source/dev use)
-      // so the packaged app's per-install userData home always wins — an empty
-      // value makes resolve_home() fall back to --root (userData/.ironjarvis).
-      { IRONJARVIS_TOKEN: authToken, IRONJARVIS_HOME: "" },
-      false
+    startService("daemon", () =>
+      spawnChild(
+        "daemon",
+        DAEMON_EXE,
+        ["serve", "--host", "127.0.0.1", "--port", String(DAEMON_PORT), "--root", stateDir],
+        path.dirname(DAEMON_EXE),
+        // Blank out any ambient IRONJARVIS_HOME (e.g. left over from source/dev use)
+        // so the packaged app's per-install userData home always wins — an empty
+        // value makes resolve_home() fall back to --root (userData/.ironjarvis).
+        { IRONJARVIS_TOKEN: authToken, IRONJARVIS_HOME: "" },
+        false
+      )
     );
     // 2) Next.js standalone server (server.js) via Electron's bundled Node.
-    dashboardProc = spawnChild(
-      "dashboard",
-      process.execPath,
-      [DASHBOARD_SERVER],
-      path.dirname(DASHBOARD_SERVER),
-      {
-        ELECTRON_RUN_AS_NODE: "1",
-        PORT: String(DASHBOARD_PORT),
-        HOSTNAME: "127.0.0.1",
-        NODE_ENV: "production",
-      },
-      false
+    startService("dashboard", () =>
+      spawnChild(
+        "dashboard",
+        process.execPath,
+        [DASHBOARD_SERVER],
+        path.dirname(DASHBOARD_SERVER),
+        {
+          ELECTRON_RUN_AS_NODE: "1",
+          PORT: String(DASHBOARD_PORT),
+          HOSTNAME: "127.0.0.1",
+          NODE_ENV: "production",
+        },
+        false
+      )
     );
   } else {
     // DEV: drive the repo via uv + pnpm; preflight that they're installed.
@@ -656,17 +1072,21 @@ async function startup() {
       return;
     }
     // 1) Python daemon (FastAPI on DAEMON_PORT) with the per-install token.
-    daemonProc = spawnChild(
-      "daemon",
-      "uv",
-      ["run", "ironjarvis", "serve", "--host", "127.0.0.1", "--port", String(DAEMON_PORT), "--root", REPO_ROOT],
-      REPO_ROOT,
-      { IRONJARVIS_TOKEN: authToken }
+    startService("daemon", () =>
+      spawnChild(
+        "daemon",
+        "uv",
+        ["run", "ironjarvis", "serve", "--host", "127.0.0.1", "--port", String(DAEMON_PORT), "--root", REPO_ROOT],
+        REPO_ROOT,
+        { IRONJARVIS_TOKEN: authToken }
+      )
     );
     // 2) Next.js dashboard. `next start` honours the PORT env var.
-    dashboardProc = spawnChild("dashboard", "pnpm", ["start"], DASHBOARD_DIR, {
-      PORT: String(DASHBOARD_PORT),
-    });
+    startService("dashboard", () =>
+      spawnChild("dashboard", "pnpm", ["start"], DASHBOARD_DIR, {
+        PORT: String(DASHBOARD_PORT),
+      })
+    );
   }
 
   // 3) Health-gate the DAEMON first (guards a foreign process squatting on the
@@ -702,8 +1122,18 @@ async function startup() {
   }
 
   clearUpdatePending(); // a clean, healthy boot means the current version is good
-  createMainWindow();
+  bootComplete = true;
+  if (START_HIDDEN) {
+    // Login boot: stay in the tray — the window is created on demand (tray
+    // click / hotkey / second launch). Close the splash if one exists.
+    if (loadingWin && !loadingWin.isDestroyed()) loadingWin.close();
+    loadingWin = null;
+  } else {
+    createMainWindow();
+  }
   checkForUpdates();
+  // Long-lived tray apps must keep looking for updates, not just at boot.
+  setInterval(checkForUpdates, UPDATE_RECHECK_MS);
 }
 
 // Shared startup-failure path. After a just-applied update that repeatedly fails
@@ -737,7 +1167,19 @@ function handleStartupFailure(title, message, pendingUpdate) {
 function registerHotkey() {
   try {
     const ok = globalShortcut.register(HOTKEY, () => showMainWindow());
-    if (!ok) console.warn(`[hotkey] ${HOTKEY} registration failed (already taken?)`);
+    if (!ok) {
+      console.warn(`[hotkey] ${HOTKEY} registration failed (already taken?)`);
+      // Tell the user instead of failing silently — the hotkey is a primary way
+      // back to a window that closes to the tray.
+      try {
+        new Notification({
+          title: "Iron Jarvis",
+          body: `The global hotkey ${HOTKEY} is taken by another app — use the tray icon to open Iron Jarvis.`,
+        }).show();
+      } catch {
+        /* notifications unavailable */
+      }
+    }
   } catch (err) {
     console.error("[hotkey] registration error:", err && err.message);
   }
@@ -757,6 +1199,10 @@ if (!gotLock) {
     } else if (loadingWin && !loadingWin.isDestroyed()) {
       if (loadingWin.isMinimized()) loadingWin.restore();
       loadingWin.focus();
+    } else if (bootComplete) {
+      // Hidden in the tray with no window (e.g. --hidden login boot, or the
+      // window was destroyed on hide) — a second launch means "show me the app".
+      showMainWindow();
     }
     // else still booting: the in-flight startup will open the window itself.
   });
@@ -781,10 +1227,20 @@ if (!gotLock) {
     // Intentionally empty: stay resident in the tray.
   });
 
-  app.on("before-quit", () => {
+  // Quit path: ask the daemon to exit CLEANLY first (drains requests, runs the
+  // FastAPI lifespan shutdown) and only force-kill as the fallback. The auto-
+  // update path never gets here with work to do — it runs shutdown() itself
+  // synchronously (shuttingDown set) before quitAndInstall, so this falls through.
+  app.on("before-quit", (event) => {
     isQuitting = true;
     flushWindowState();
-    shutdown();
+    if (shuttingDown || quitProcessed) return; // teardown already done/in-flight
+    event.preventDefault();
+    quitProcessed = true;
+    requestDaemonShutdown(2000).finally(() => {
+      shutdown(); // force-kills whatever is still alive (incl. the dashboard)
+      app.quit(); // re-enters before-quit; falls through this time
+    });
   });
 
   app.on("will-quit", () => {

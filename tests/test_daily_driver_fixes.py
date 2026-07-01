@@ -429,3 +429,27 @@ def test_rehydration_steps_recorded_independently(tmp_path):
         loops = client.get("/diagnostics").json()["background_loops"]
     assert loops.get("reconcile_sessions", {}).get("ok") is True
     assert loops.get("rehydrate_webhooks", {}).get("ok") is True
+
+
+# --- Graceful shutdown endpoint (desktop Quit) ---------------------------------
+
+
+def test_shutdown_endpoint_schedules_graceful_stop(tmp_path, monkeypatch):
+    """POST /shutdown must ack FIRST, then trigger the (deferred) SIGTERM path.
+
+    ``_graceful_stop`` is monkeypatched — actually raising SIGTERM would kill
+    the test run. The Timer defers it so the HTTP response wins the race.
+    """
+    import threading
+
+    import iron_jarvis.daemon.app as app_module
+
+    stopped = threading.Event()
+    monkeypatch.setattr(app_module, "_graceful_stop", stopped.set)
+
+    with TestClient(create_app(str(tmp_path))) as client:
+        r = client.post("/shutdown")
+        assert r.status_code == 200
+        assert r.json()["ok"] is True
+        # The response returned BEFORE the stop fired; the Timer fires ~0.2s later.
+        assert stopped.wait(timeout=3.0) is True
