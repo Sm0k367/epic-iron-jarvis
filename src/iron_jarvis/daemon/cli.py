@@ -46,9 +46,13 @@ def _port_in_use(host: str, port: int) -> bool:
 
 
 def _home_for(root: str) -> Path:
-    """The .ironjarvis state home for a root — WITHOUT building the platform, so
-    recovery commands work even when the platform/config can't load."""
-    return Path(root).resolve() / ".ironjarvis"
+    """The state home for a root — WITHOUT building the platform, so recovery
+    commands work even when the platform/config can't load. Honors IRONJARVIS_HOME
+    (the shared 'one brain across all projects' home) so backup/restore/repair
+    target the SAME home the running daemon uses, not a stale project-local one."""
+    from ..core.config import resolve_home
+
+    return resolve_home(root)
 
 
 def _source_repo_root() -> "Path | None":

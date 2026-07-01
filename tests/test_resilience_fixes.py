@@ -31,6 +31,48 @@ def test_open_db_self_heals_a_corrupt_database(tmp_path):
     engine.dispose()
 
 
+def test_open_db_never_touches_a_healthy_database(tmp_path):
+    # Regression guard (CHAOS-DB-TRUNC-1): a healthy DB must be left ALONE — no
+    # false quarantine, no truncation, data preserved.
+    from iron_jarvis.core.db import _db_is_corrupt
+
+    db = tmp_path / "ironjarvis.db"
+    engine = open_db(db)
+    with Session(engine) as s:
+        s.add(EventRecord(id="e1", type="t", session_id=None, payload_json="{}"))
+        s.commit()
+    engine.dispose()
+
+    assert _db_is_corrupt(db) is False
+    engine = open_db(db)  # re-open a HEALTHY DB
+    with Session(engine) as s:
+        assert s.exec(select(EventRecord)).all(), "data must survive re-open"
+    engine.dispose()
+    assert not any(p.name.startswith("ironjarvis.db.corrupt-") for p in tmp_path.iterdir())
+
+
+def test_db_is_corrupt_distinguishes_real_corruption(tmp_path):
+    from iron_jarvis.core.db import _db_is_corrupt
+
+    db = tmp_path / "ironjarvis.db"
+    open_db(db).dispose()
+    assert _db_is_corrupt(db) is False  # healthy
+    db.write_bytes(b"definitely not a sqlite database " * 30)
+    assert _db_is_corrupt(db) is True  # malformed
+
+
+def test_home_for_honors_ironjarvis_home(tmp_path, monkeypatch):
+    # Regression guard (MPFIT-1): recovery commands must target the SAME home the
+    # daemon uses, incl. the shared IRONJARVIS_HOME brain.
+    from iron_jarvis.daemon.cli import _home_for
+
+    shared = tmp_path / "shared-brain"
+    monkeypatch.setenv("IRONJARVIS_HOME", str(shared))
+    assert _home_for(str(tmp_path / "anyproject")) == shared.resolve()
+    monkeypatch.delenv("IRONJARVIS_HOME", raising=False)
+    assert _home_for(str(tmp_path / "proj")) == (tmp_path / "proj").resolve() / ".ironjarvis"
+
+
 def test_quarantine_db_preserves_the_corrupt_file(tmp_path):
     # The offline recovery path (daemon down, no live handle) renames the corrupt
     # DB aside so data can be salvaged/restored, and drops its WAL sidecars.

@@ -93,50 +93,85 @@ def quarantine_db(db_path: str | Path, reason: str) -> "Path | None":
     return dead
 
 
+def _db_is_corrupt(db_path: str | Path) -> bool:
+    """True ONLY if the file is a genuinely MALFORMED SQLite DB (vs a transient
+    lock / disk-full / permission error). Uses a fresh raw connection so it never
+    depends on a half-failed engine. A lock/busy is NOT corruption."""
+    import sqlite3
+
+    try:
+        con = sqlite3.connect(str(db_path))
+        try:
+            row = con.execute("PRAGMA integrity_check(1)").fetchone()
+        finally:
+            con.close()
+        return not row or row[0] != "ok"
+    except sqlite3.DatabaseError:
+        return True  # "file is not a database" / header corruption
+    except sqlite3.OperationalError:
+        return False  # locked / busy / cannot-open — environmental, NOT corruption
+
+
+#: A valid SQLite database (or a 0-byte new file) begins with this 16-byte magic.
+_SQLITE_MAGIC = b"SQLite format 3\x00"
+
+
 def open_db(db_path: str | Path) -> Engine:
-    """Open + initialize the DB, SELF-HEALING a corrupt one so the daemon ALWAYS
-    boots. If init fails because the file is malformed (header/schema corruption),
-    the corrupt DB is quarantined and a fresh one is created — the daemon comes up
-    (empty) instead of being wedged, and the quarantined file + auto-backups allow
-    recovery via `ironjarvis repair` / `ironjarvis restore`."""
+    """Open + initialize the DB, self-healing a CONFIRMED-corrupt one so the daemon
+    still boots — WITHOUT ever destroying a healthy DB.
+
+    1. Cheap header precheck (16 bytes): a non-empty file that isn't a SQLite DB is
+       quarantined BEFORE SQLAlchemy opens it (no lingering handle blocks the
+       rename), then replaced with a fresh DB. This is the common "won't boot"
+       header-corruption case.
+    2. Otherwise try init_db. On failure, distinguish real corruption from a
+       transient/environmental error (lock, disk full, read-only) via a raw
+       ``integrity_check``: ONLY a confirmed-malformed file is quarantined; a
+       lock/disk/permission error is re-raised LOUDLY — a healthy-but-locked or
+       -full DB is NEVER truncated. Recover data with `ironjarvis repair`.
+    (Data-page corruption that still boots is caught later by /diagnostics + repair.)
+    """
     from sqlalchemy.exc import DatabaseError, OperationalError
 
+    path = Path(db_path)
+    is_mem = str(db_path) == ":memory:"
+    if not is_mem and path.exists() and path.stat().st_size > 0:
+        try:
+            with open(path, "rb") as fh:
+                header = fh.read(16)
+        except OSError:
+            header = _SQLITE_MAGIC  # can't read it here → let init_db surface why
+        if header != _SQLITE_MAGIC:
+            quarantine_db(path, "not a SQLite database (bad header)")
+
     engine = make_engine(db_path)
+    err: BaseException | None = None
     try:
         init_db(engine)
         return engine
     except (DatabaseError, OperationalError) as exc:
-        if str(db_path) == ":memory:":
-            raise
-        reason = f"init: {type(exc).__name__}: {exc}"
-        engine.dispose()
-        # The exception's traceback pins the failed sqlite3 connection (and thus the
-        # OS file handle), which blocks the rename on Windows — drop it, then GC.
-        exc = None
-        import gc
+        err = exc
+        err.__traceback__ = None  # drop the frames pinning the failed sqlite handle
+    engine.dispose()
+    if is_mem:
+        raise err
+    import gc
 
-        gc.collect()
-        quarantine_db(db_path, reason)
+    gc.collect()
+    if not (path.exists() and _db_is_corrupt(path)):
+        # Environmental (lock / disk full / read-only), NOT corruption — never
+        # destroy the DB; re-attempt once so the true cause propagates loudly.
         engine = make_engine(db_path)
-        try:
-            init_db(engine)  # fresh DB
-        except (DatabaseError, OperationalError):
-            # Quarantine couldn't free the path (locked) — last resort: truncate to
-            # 0 bytes (an empty file is a valid new SQLite DB) and retry.
-            engine.dispose()
-            gc.collect()
-            with open(db_path, "wb"):
-                pass
-            for sfx in ("-wal", "-shm"):
-                s = Path(str(db_path) + sfx)
-                try:
-                    if s.exists():
-                        s.unlink()
-                except OSError:
-                    pass
-            engine = make_engine(db_path)
-            init_db(engine)
+        init_db(engine)
         return engine
+    if quarantine_db(path, "confirmed corrupt database at init") is None and path.exists():
+        raise RuntimeError(
+            f"corrupt database {db_path} could not be quarantined (in use?). Stop all "
+            "Iron Jarvis processes and run `ironjarvis repair` to restore a backup."
+        )
+    engine = make_engine(db_path)
+    init_db(engine)  # fresh DB on the now-free path
+    return engine
 
 
 def _ensure_meta(engine: Engine) -> None:
