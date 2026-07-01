@@ -298,10 +298,25 @@ def global_config_path() -> Path:
     return Path.home() / ".ironjarvis" / "config.toml"
 
 
+def resolve_home(project_root: str | Path) -> Path:
+    """The state home (DB, secrets, memory, sessions, schedules, workspaces).
+
+    ``IRONJARVIS_HOME`` (when set) DECOUPLES all persistent state from the
+    per-invocation project directory, so ONE Iron Jarvis brain — one vault of
+    provider logins/keys, one memory, one session history — serves EVERY project
+    the owner works in (the "daily driver for all projects" model). Unset (the
+    default) keeps the per-project ``<project_root>/.ironjarvis`` home, so existing
+    behavior is unchanged and each project stays fully isolated."""
+    override = os.environ.get("IRONJARVIS_HOME", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    return Path(project_root).resolve() / ".ironjarvis"
+
+
 def load_config(project_root: str | Path) -> Config:
     """Load merged config for a project root."""
     root = Path(project_root).resolve()
-    home = root / ".ironjarvis"
+    home = resolve_home(root)
 
     layered: dict[str, Any] = {}
     layered = _deep_merge(layered, _read_toml(global_config_path()))

@@ -74,3 +74,29 @@ def test_apply_update_tags_pre_update_commit(tmp_path):
 
     apply_update(tmp_path, runner=runner, run_tests=False)
     assert ["git", "tag", "-f", "ironjarvis/pre-update", "abc1234"] in calls
+
+
+# --- MP-1/MP-2: IRONJARVIS_HOME gives ONE brain across all projects -----------
+
+
+def test_ironjarvis_home_shares_one_brain_across_projects(tmp_path, monkeypatch):
+    from iron_jarvis.core.config import load_config
+
+    shared = tmp_path / "shared-brain"
+    monkeypatch.setenv("IRONJARVIS_HOME", str(shared))
+    a = load_config(tmp_path / "projectA")
+    b = load_config(tmp_path / "projectB")
+    # One shared home (DB / secrets / memory / sessions) for every project...
+    assert a.home == shared.resolve() == b.home
+    assert a.db_path == b.db_path
+    # ...while the per-invocation project_root still differs (per-project work).
+    assert a.project_root != b.project_root
+
+
+def test_default_home_is_isolated_per_project(tmp_path, monkeypatch):
+    from iron_jarvis.core.config import load_config
+
+    monkeypatch.delenv("IRONJARVIS_HOME", raising=False)
+    a = load_config(tmp_path / "projA")
+    b = load_config(tmp_path / "projB")
+    assert a.home != b.home  # default: each project fully isolated (unchanged)
