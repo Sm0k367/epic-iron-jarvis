@@ -19,6 +19,7 @@ class FileSearchTool(Tool):
     """Search configured roots by name (glob/substring), content (regex), or semantics."""
 
     name = "file_search"
+    returns_untrusted_content = True  # matched file text can carry planted instructions
     description = (
         "Search across configured roots (broader than the workspace grep): "
         "mode 'name' (glob/substring on paths), 'content' (regex, default), or "

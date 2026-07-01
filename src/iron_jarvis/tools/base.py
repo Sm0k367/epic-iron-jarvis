@@ -42,6 +42,12 @@ class Tool(ABC):
     input_schema: dict[str, Any] = {}
     #: key looked up in Config.permissions; defaults to ``name``.
     permission_key: str = ""
+    #: True when this tool's output is EXTERNALLY-sourced (a file/PDF/note/web
+    #: page/memory a third party could have planted). The agent runtime fences
+    #: such output as untrusted DATA and scans it for prompt-injection before the
+    #: model sees it, so imperatives inside it can't be followed as instructions.
+    #: (web_search/browse already self-fence, so they leave this False.)
+    returns_untrusted_content: bool = False
 
     def perm_key(self) -> str:
         return self.permission_key or self.name

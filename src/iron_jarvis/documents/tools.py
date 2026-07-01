@@ -41,6 +41,7 @@ def _truncate(text: str) -> tuple[str, bool]:
 
 class ReadDocumentTool(Tool):
     name = "read_document"
+    returns_untrusted_content = True  # a read file can carry planted instructions
     description = (
         "Extract text from a document of any type — PDF, Word (.docx), Excel "
         "(.xlsx), PowerPoint (.pptx), CSV, or plain text/code. May target ANY "
@@ -112,6 +113,7 @@ class WriteDocumentTool(Tool):
 
 class ExtractPdfTool(Tool):
     name = "extract_pdf"
+    returns_untrusted_content = True  # a PDF can carry planted instructions
     description = "Extract the text of a PDF file (absolute or workspace-relative path)."
     input_schema = {
         "type": "object",

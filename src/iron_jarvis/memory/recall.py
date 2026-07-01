@@ -20,6 +20,7 @@ class RecallTool(Tool):
     """Semantic recall across indexed file roots and long-term memory."""
 
     name = "recall"
+    returns_untrusted_content = True  # blends indexed files + LTM (planted content)
     description = (
         "Semantic recall: find the most relevant snippets by MEANING (not just "
         "substring) across the indexed file roots and long-term memory (brain / "

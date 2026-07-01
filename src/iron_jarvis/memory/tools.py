@@ -76,6 +76,7 @@ class MemorySearchTool(Tool):
     """Cosine-similarity search across memory (§22)."""
 
     name = "memory_search"
+    returns_untrusted_content = True  # stored memory can contain planted content
     description = "Search layered memory by semantic similarity; returns top-k matches."
     permission_key = "memory_search"
     input_schema = {
