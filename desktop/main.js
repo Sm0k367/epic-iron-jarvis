@@ -606,7 +606,10 @@ async function startup() {
       DAEMON_EXE,
       ["serve", "--host", "127.0.0.1", "--port", String(DAEMON_PORT), "--root", stateDir],
       path.dirname(DAEMON_EXE),
-      { IRONJARVIS_TOKEN: authToken },
+      // Blank out any ambient IRONJARVIS_HOME (e.g. left over from source/dev use)
+      // so the packaged app's per-install userData home always wins — an empty
+      // value makes resolve_home() fall back to --root (userData/.ironjarvis).
+      { IRONJARVIS_TOKEN: authToken, IRONJARVIS_HOME: "" },
       false
     );
     // 2) Next.js standalone server (server.js) via Electron's bundled Node.

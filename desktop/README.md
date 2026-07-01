@@ -82,34 +82,38 @@ IJ_DAEMON_PORT=9001 IJ_DASHBOARD_PORT=3100 pnpm start
 
 ## Packaging
 
-```bash
+Build the SELF-CONTAINED Windows installer. The installed app needs **no Python /
+uv / Node / pnpm** — it bundles a PyInstaller-frozen daemon **and** the Next.js
+standalone dashboard:
+
+```powershell
 cd desktop
-pnpm dist          # electron-builder --win → NSIS installer in desktop/release/
+pnpm run dist:full   # build-installer.ps1: freeze daemon → build dashboard → NSIS installer in desktop/release/
 ```
+
+> **Use `dist:full`, not bare `pnpm dist`.** `pnpm dist` runs ONLY electron-builder
+> — it does not freeze the daemon or build the dashboard, so it silently produces a
+> broken installer (electron-builder only *warns* on the missing `extraResources`).
+> `dist:full` (and CI via `.github/workflows/release.yml`) freezes the daemon,
+> builds the standalone dashboard, stages both into `extraResources`, and stamps
+> the version from the git tag / `pyproject.toml`.
 
 The `electron-builder` config lives in `package.json` under `build`:
 
-- `appId`: `com.realdealcpa.ironjarvis`
-- `productName`: `Iron Jarvis`
-- `directories.output`: `release`
-- `win.target`: `nsis`
-- `files`: `main.js`, `preload.js`, `loading.html`, `assets/**`
-
-> **Important:** the packaged app **still expects the repo (daemon + `dashboard/`)
-> to live one directory above the installed app** and still shells out to `uv`
-> and `pnpm`. The installer ships the Electron shell, *not* Python or the
-> dashboard. Treat `pnpm dist` as "package the shell", not "ship to a machine
-> that doesn't have the repo".
+- `appId`: `com.realdealcpa.ironjarvis` · `productName`: `Iron Jarvis` · `win.target`: `nsis`
+- `extraResources`: the frozen daemon (`packaging/dist/ironjarvis` → `daemon`) and the
+  standalone dashboard (`dashboard/.next/standalone` → `dashboard`)
+- `publish`: GitHub Releases with `releaseType: release` — the packaged app
+  auto-updates via electron-updater
 
 ## Roadmap
 
-To become a true standalone install (no repo, no global `uv`/`pnpm` required):
+The app is already a true standalone install (frozen daemon + bundled dashboard;
+no repo, no global `uv`/`pnpm` required). Remaining:
 
-- Bundle a prebuilt dashboard (`next build` output or a static export) inside the
-  app and serve it locally instead of shelling out to `pnpm start`.
-- Ship the daemon as a packaged binary (e.g. PyInstaller) or an embedded Python,
-  and reference it via `extraResources` instead of `uv run`.
-- Code-sign the installer.
+- **Code-sign** the installer + daemon to remove the SmartScreen "unknown
+  publisher" warning on a fresh machine (needs an OV/EV cert or Azure Trusted
+  Signing).
 
 ## Troubleshooting
 
