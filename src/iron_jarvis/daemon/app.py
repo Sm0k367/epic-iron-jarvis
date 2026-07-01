@@ -393,7 +393,16 @@ def create_app(project_root: str | None = None) -> FastAPI:
             if days > 0:
                 from ..core.db import prune_events
 
-                prune_events(platform.engine, days)
+                pruned = prune_events(platform.engine, days)
+                if pruned:
+                    # Surface it — the 90-day default means the first boot after an
+                    # upgrade from keep-forever prunes old trace history; don't do it
+                    # silently. Set event_retention_days=0 in config.toml to disable.
+                    log.warning(
+                        "event-log retention: pruned %d event(s) older than %d days "
+                        "(set event_retention_days=0 to keep forever)",
+                        pruned, days,
+                    )
         except Exception:  # pragma: no cover - never block boot
             pass
         # Periodic auto-backup safety net — a daily driver shouldn't depend on the
