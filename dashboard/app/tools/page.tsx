@@ -306,6 +306,7 @@ export default function ToolsPage() {
                             className="field min-w-[6rem] flex-1 px-2 py-1.5 font-mono text-xs"
                           />
                           <select
+                            aria-label="Parameter type"
                             value={row.type}
                             onChange={(e) =>
                               updateRow(row.id, { type: e.target.value as ParamType })

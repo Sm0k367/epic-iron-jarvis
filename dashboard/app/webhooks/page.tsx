@@ -142,6 +142,7 @@ export default function WebhooksPage() {
                     Direction
                   </label>
                   <select
+                    aria-label="Direction"
                     value={direction}
                     onChange={(e) => setDirection(e.target.value as Direction)}
                     className="field"

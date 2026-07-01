@@ -129,10 +129,13 @@ export async function api<T>(path: string, init?: ApiInit): Promise<T> {
     }
     throw new ApiError(detail, res.status);
   }
-  // A successful DATA response clears the error signals. Skip /health (auth-exempt:
-  // it succeeds even with a bad token, so it must not clear an auth error).
-  if (path !== "/health") signalAuth(false);
-  signalError(false);
+  // A successful DATA response clears the error signals. Skip /health for BOTH: it
+  // is auth-exempt (a bad token still 200s) AND it polls every 5s, so clearing on it
+  // would race a real persistent data 500 away (self-clear + flicker).
+  if (path !== "/health") {
+    signalAuth(false);
+    signalError(false);
+  }
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }

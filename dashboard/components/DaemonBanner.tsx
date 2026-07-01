@@ -42,9 +42,11 @@ export function DaemonBanner() {
     if (state !== dismissed) setDismissed(null);
   }, [state, dismissed]);
 
-  const showOffline = state === "offline";
-  const showAuth = state === "auth";
-  const showError = state === "error";
+  // Gate on the dismissed-state too, or the X buttons do nothing (the useEffect
+  // above re-shows the banner when a DIFFERENT problem appears by clearing dismiss).
+  const showOffline = state === "offline" && dismissed !== "offline";
+  const showAuth = state === "auth" && dismissed !== "auth";
+  const showError = state === "error" && dismissed !== "error";
 
   return (
     <AnimatePresence>
