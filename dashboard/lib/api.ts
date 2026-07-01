@@ -74,38 +74,50 @@ function signalAuth(unauthorized: boolean): void {
   authListeners.forEach((fn) => fn(unauthorized));
 }
 
-// Abort a hanging GET (a frozen/slow daemon) so background polls surface "offline"
-// instead of spinning forever with stale data and a false-green status. Only GETs:
-// a mutation (start session, apply update) can legitimately run much longer and
-// must not be aborted mid-flight.
-const REQUEST_TIMEOUT_MS = 15000;
+// App-wide "the daemon returned an error" signal (a non-auth 4xx/5xx). Without it a
+// 500 on a data page renders a misleading "No X yet" empty state (pages treat only
+// status===0 as a problem). Cleared by the next successful data request.
+type ErrorListener = (failing: boolean) => void;
+const errorListeners = new Set<ErrorListener>();
+export function onRequestErrorChange(fn: ErrorListener): () => void {
+  errorListeners.add(fn);
+  return () => errorListeners.delete(fn);
+}
+function signalError(failing: boolean): void {
+  errorListeners.forEach((fn) => fn(failing));
+}
 
-export async function api<T>(path: string, init?: RequestInit): Promise<T> {
-  const method = (init?.method || "GET").toUpperCase();
-  const controller = method === "GET" ? new AbortController() : null;
-  const timer = controller
-    ? setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS)
-    : null;
+// OPT-IN request timeout. Applied ONLY when a caller passes `timeoutMs` (the
+// /health poll + list polls, to detect a frozen-but-connected daemon). NEVER
+// blanket-applied: a user-initiated GET like a whole-drive file search or the first
+// cold-Ollama semantic search legitimately runs far longer than any poll timeout.
+export type ApiInit = RequestInit & { timeoutMs?: number };
+
+export async function api<T>(path: string, init?: ApiInit): Promise<T> {
+  const { timeoutMs, ...rest } = init || {};
+  const controller = timeoutMs ? new AbortController() : null;
+  const timer = controller ? setTimeout(() => controller.abort(), timeoutMs) : null;
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
-      ...init,
+      ...rest,
       headers: {
         "Content-Type": "application/json",
         ...authHeaders(),
-        ...(init?.headers || {}),
+        ...(rest.headers || {}),
       },
       cache: "no-store",
       ...(controller ? { signal: controller.signal } : {}),
     });
   } catch {
-    // Network error or timeout => daemon offline / not responding.
+    // Network error or (opt-in) timeout => daemon offline / not responding.
     throw new ApiError("daemon offline", 0);
   } finally {
     if (timer) clearTimeout(timer);
   }
   if (!res.ok) {
     if (res.status === 401 || res.status === 403) signalAuth(true);
+    else signalError(true); // a non-auth server error — surface it globally
     let detail = `${res.status} ${res.statusText}`;
     try {
       const body = await res.json();
@@ -115,14 +127,15 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(detail, res.status);
   }
-  // A successful DATA response means the token is good again — clear the signal.
-  // Skip /health (auth-exempt: it succeeds even with a bad token).
+  // A successful DATA response clears the error signals. Skip /health (auth-exempt:
+  // it succeeds even with a bad token, so it must not clear an auth error).
   if (path !== "/health") signalAuth(false);
+  signalError(false);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }
 
-export const get = <T>(path: string) => api<T>(path);
+export const get = <T>(path: string, opts?: { timeoutMs?: number }) => api<T>(path, opts);
 
 export const post = <T>(path: string, body?: unknown) =>
   api<T>(path, { method: "POST", body: body ? JSON.stringify(body) : undefined });

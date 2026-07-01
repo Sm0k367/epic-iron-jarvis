@@ -158,6 +158,7 @@ export default function TemplatesPage() {
                     <Bot size={12} /> Agent type
                   </label>
                   <select
+                    aria-label="Agent type"
                     value={effectiveAgent}
                     onChange={(e) => setAgentType(e.target.value)}
                     className="field"
@@ -189,6 +190,7 @@ export default function TemplatesPage() {
                     <span className="text-zinc-600">(optional)</span>
                   </label>
                   <select
+                    aria-label="Model"
                     value={model}
                     onChange={(e) => setModel(e.target.value)}
                     className="field"

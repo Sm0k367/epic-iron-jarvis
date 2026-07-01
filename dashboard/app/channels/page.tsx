@@ -127,7 +127,7 @@ export default function ChannelsPage() {
                 <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
                   Channel
                 </label>
-                <select value={channel} onChange={(e) => setChannel(e.target.value)} className="field">
+                <select aria-label="Channel" value={channel} onChange={(e) => setChannel(e.target.value)} className="field">
                   <option value="">All channels</option>
                   {channels.map((c) => (
                     <option key={c} value={c}>

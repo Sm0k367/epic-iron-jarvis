@@ -234,6 +234,7 @@ export default function AgentsPage() {
                   <Cpu size={12} /> Model
                 </label>
                 <select
+                  aria-label="Model"
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
                   className="field"
@@ -305,6 +306,7 @@ export default function AgentsPage() {
                   Agent
                 </label>
                 <select
+                  aria-label="Agent"
                   value={spawnAgent}
                   onChange={(e) => setSpawnAgent(e.target.value)}
                   className="field"

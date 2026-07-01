@@ -9,7 +9,7 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ApiError, get, onUnauthorizedChange } from "./api";
+import { ApiError, get, onRequestErrorChange, onUnauthorizedChange } from "./api";
 import type { Health } from "./types";
 
 export interface DaemonState {
@@ -18,6 +18,9 @@ export interface DaemonState {
   /** True when a data request was rejected 401/403 (missing/stale token). The
    *  daemon is reachable but won't accept us until a valid token is entered. */
   unauthorized: boolean;
+  /** True when a data request failed with a non-auth server error (4xx/5xx) — the
+   *  page's data may be missing even though the daemon is online. */
+  requestError: boolean;
   /** Latest /health payload, or null before the first successful poll. */
   health: Health | null;
   /** True until the first poll resolves (so we don't flash "offline" on load). */
@@ -36,22 +39,27 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
   const [health, setHealth] = useState<Health | null>(null);
   const [online, setOnline] = useState(false);
   const [unauthorized, setUnauthorized] = useState(false);
+  const [requestError, setRequestError] = useState(false);
   const [checking, setChecking] = useState(true);
   const [nonce, setNonce] = useState(0);
   const firstRef = useRef(true);
 
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
 
-  // A 401/403 from ANY data request (the /health poll is auth-exempt, so it can't
-  // see a bad token) flips this on; the next authorized response clears it.
+  // A 401/403 (bad token) or a non-auth 4xx/5xx from ANY data request — the /health
+  // poll can't see these (auth-exempt + narrow) — flips these on; the next good
+  // response clears them.
   useEffect(() => onUnauthorizedChange(setUnauthorized), []);
+  useEffect(() => onRequestErrorChange(setRequestError), []);
 
   useEffect(() => {
     let cancelled = false;
 
     const poll = async () => {
       try {
-        const h = await get<Health>("/health");
+        // Opt-in 8s timeout so a FROZEN-but-connected daemon (a blocking tool call)
+        // trips "offline" instead of hanging the poll forever with a false-green dot.
+        const h = await get<Health>("/health", { timeoutMs: 8000 });
         if (cancelled) return;
         setHealth(h);
         setOnline(true);
@@ -81,7 +89,9 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
   }, [nonce]);
 
   return (
-    <DaemonContext.Provider value={{ online, unauthorized, health, checking, refresh }}>
+    <DaemonContext.Provider
+      value={{ online, unauthorized, requestError, health, checking, refresh }}
+    >
       {children}
     </DaemonContext.Provider>
   );
@@ -94,6 +104,7 @@ export function useDaemon(): DaemonState {
     return {
       online: true,
       unauthorized: false,
+      requestError: false,
       health: null,
       checking: true,
       refresh: () => {},

@@ -626,6 +626,7 @@ function NewGoalCard({
               Priority
             </label>
             <select
+              aria-label="Priority"
               value={priority}
               onChange={(e) => setPriority(Number(e.target.value))}
               className="field"
@@ -642,6 +643,7 @@ function NewGoalCard({
               Dial
             </label>
             <select
+              aria-label="Autonomy dial"
               value={level}
               onChange={(e) => setLevel(e.target.value)}
               className="field"

@@ -36,6 +36,14 @@ export default function RootLayout({
   return (
     <html lang="en">
       <body>
+        {/* Skip past the ~34 sidebar nav links straight to page content (WCAG 2.4.1).
+            Visually hidden until focused. */}
+        <a
+          href="#main-content"
+          className="sr-only rounded-lg bg-accent px-4 py-2 text-sm font-semibold text-white focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-[100]"
+        >
+          Skip to main content
+        </a>
         <DaemonProvider>
           <div className="flex h-screen flex-col overflow-hidden">
             {/* App-wide daemon-offline banner (shared /health source). */}
@@ -57,7 +65,13 @@ export default function RootLayout({
                     <NotificationBell />
                   </div>
                 </header>
-                <div className="mx-auto w-full max-w-7xl px-6 py-8 lg:px-10">{children}</div>
+                <div
+                  id="main-content"
+                  tabIndex={-1}
+                  className="mx-auto w-full max-w-7xl px-6 py-8 outline-none lg:px-10"
+                >
+                  {children}
+                </div>
               </main>
             </div>
           </div>

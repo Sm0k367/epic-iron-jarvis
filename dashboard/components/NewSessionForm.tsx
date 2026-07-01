@@ -247,6 +247,7 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
             Agent type
           </label>
           <select
+            aria-label="Agent type"
             value={agentType}
             onChange={(e) => setAgentType(e.target.value)}
             className="field"
@@ -268,6 +269,7 @@ function NewSessionFormInner({ onCreated }: { onCreated?: () => void }) {
             <Cpu size={12} /> Model
           </label>
           <select
+            aria-label="Model"
             value={choice}
             onChange={(e) => setChoice(e.target.value)}
             className="field"

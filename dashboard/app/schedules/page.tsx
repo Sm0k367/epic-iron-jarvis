@@ -192,6 +192,7 @@ export default function SchedulesPage() {
                     <Repeat size={12} /> Repeat
                   </label>
                   <select
+                    aria-label="Repeat"
                     value={repeat}
                     onChange={(e) => setRepeat(e.target.value)}
                     className="field"
@@ -245,7 +246,7 @@ export default function SchedulesPage() {
                   <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
                     Kind
                   </label>
-                  <select value={kind} onChange={(e) => setKind(e.target.value)} className="field">
+                  <select aria-label="Task kind" value={kind} onChange={(e) => setKind(e.target.value)} className="field">
                     {KINDS.map((k) => (
                       <option key={k} value={k}>
                         {k}
@@ -265,6 +266,7 @@ export default function SchedulesPage() {
                       </div>
                     ) : (
                       <select
+                        aria-label="Workflow to run"
                         value={workflowName}
                         onChange={(e) => setWorkflowName(e.target.value)}
                         className="field"

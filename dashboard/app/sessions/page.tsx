@@ -175,6 +175,7 @@ export default function SessionsPage() {
                     />
                   </div>
                   <select
+                    aria-label="Filter by status"
                     value={statusFilter}
                     onChange={(e) => setStatusFilter(e.target.value)}
                     className="rounded-lg border border-white/[0.08] bg-ink-900/80 px-2.5 py-1.5 text-sm text-zinc-300 outline-none focus:border-accent/60"
@@ -187,6 +188,7 @@ export default function SessionsPage() {
                     ))}
                   </select>
                   <select
+                    aria-label="Filter by agent"
                     value={agentFilter}
                     onChange={(e) => setAgentFilter(e.target.value)}
                     className="rounded-lg border border-white/[0.08] bg-ink-900/80 px-2.5 py-1.5 text-sm text-zinc-300 outline-none focus:border-accent/60"

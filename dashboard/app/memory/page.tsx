@@ -88,6 +88,7 @@ export default function MemoryPage() {
                 max={50}
                 value={k}
                 onChange={(e) => setK(Number(e.target.value) || 5)}
+                aria-label="Results to retrieve (k)"
                 className="field"
               />
             </div>

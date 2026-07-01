@@ -115,6 +115,7 @@ export default function TerminalsPage() {
                 Shell
               </label>
               <select
+                aria-label="Shell"
                 value={shell}
                 onChange={(e) => setShell(e.target.value)}
                 disabled={shells.length === 0}

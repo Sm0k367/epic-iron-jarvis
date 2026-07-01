@@ -120,6 +120,7 @@ export default function SecretsPage() {
                       Kind
                     </label>
                     <select
+                      aria-label="Secret kind"
                       value={kind}
                       onChange={(e) => setKind(e.target.value)}
                       className="field"

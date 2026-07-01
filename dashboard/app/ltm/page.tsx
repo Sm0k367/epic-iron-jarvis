@@ -208,7 +208,7 @@ export default function LtmPage() {
               <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-500">
                 Source
               </label>
-              <select value={source} onChange={(e) => setSource(e.target.value)} className="field">
+              <select aria-label="Source" value={source} onChange={(e) => setSource(e.target.value)} className="field">
                 <option value="">All</option>
                 {sourceOptions.map((s) => (
                   <option key={s} value={s}>
@@ -227,6 +227,7 @@ export default function LtmPage() {
                 max={50}
                 value={k}
                 onChange={(e) => setK(Number(e.target.value) || 5)}
+                aria-label="Results to retrieve (k)"
                 className="field"
               />
             </div>
@@ -311,6 +312,7 @@ export default function LtmPage() {
                     Source
                   </label>
                   <select
+                    aria-label="Source"
                     value={appendSource}
                     onChange={(e) => setAppendSource(e.target.value)}
                     className="field"
@@ -359,6 +361,7 @@ export default function LtmPage() {
                     Kind
                   </label>
                   <select
+                    aria-label="Kind"
                     value={srcKind}
                     onChange={(e) => setSrcKind(e.target.value as Kind)}
                     className="field"

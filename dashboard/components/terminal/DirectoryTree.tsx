@@ -213,6 +213,7 @@ export function DirectoryTree({
               Root
             </label>
             <select
+              aria-label="Root directory"
               value={activeRoot ?? ""}
               onChange={(e) => setRoot(e.target.value)}
               className="field py-1.5 text-[13px]"

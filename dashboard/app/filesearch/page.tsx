@@ -125,6 +125,7 @@ export default function FileSearchPage() {
                   <HardDrive size={12} /> Search in
                 </label>
                 <select
+                  aria-label="Search in (drive or root)"
                   value={rootSel}
                   onChange={(e) => {
                     setRootSel(e.target.value);
