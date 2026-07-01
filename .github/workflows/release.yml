@@ -45,18 +45,29 @@ jobs:
             echo "publish=true" >> "$GITHUB_OUTPUT"
           fi
 
-      # electron-builder with releaseType "release" refuses to CREATE a
-      # published release for a tag that doesn't exist yet (GitHub 422:
-      # "Published releases must have a valid tag"). On branch pushes the tag
-      # doesn't exist, so create it here first. Safe: pushes made with the
-      # workflow's GITHUB_TOKEN never trigger new workflow runs (no loop).
-      - name: Ensure the release tag exists
-        if: steps.gate.outputs.publish == 'true' && github.ref_type != 'tag'
+      # electron-builder can't CREATE a published release for a nonexistent tag
+      # (GitHub 422 "Published releases must have a valid tag") — and worse, its
+      # PARALLEL asset uploaders race to create the release when none exists:
+      # GitHub accepts BOTH creates, splitting the assets across two release
+      # objects on the same tag (live-hit on v1.1.0 + v1.1.1: exe+latest.yml in
+      # one, the blockmap orphaned in a duplicate). Pre-create BOTH the tag and
+      # the release so electron-builder only ever uploads into an existing one
+      # (it uploads to a published release when it's <2h old). Safe: pushes made
+      # with the workflow's GITHUB_TOKEN never trigger new workflow runs.
+      - name: Ensure the release tag + release exist
+        if: steps.gate.outputs.publish == 'true'
         shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           ver="${{ steps.gate.outputs.version }}"
-          git tag -f "v$ver"
-          git push -f origin "v$ver"
+          if [[ "$GITHUB_REF_TYPE" != "tag" ]]; then
+            git tag -f "v$ver"
+            git push -f origin "v$ver"
+          fi
+          gh release view "v$ver" --repo "$GITHUB_REPOSITORY" > /dev/null 2>&1 || \
+            gh release create "v$ver" --repo "$GITHUB_REPOSITORY" --title "$ver" \
+              --notes "Iron Jarvis $ver — installer built and uploaded by CI."
 
       - name: Set up Python 3.12
         if: steps.gate.outputs.publish == 'true'
