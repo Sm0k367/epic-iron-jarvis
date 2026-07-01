@@ -289,8 +289,12 @@ export function MockChip({ className = "" }: { className?: string }) {
 
 export function OfflineHint({ detail }: { detail?: string }) {
   return (
-    <div className="flex items-start gap-3 rounded-2xl border border-amber-500/25 bg-amber-500/[0.07] px-4 py-3.5">
-      <ServerCrash size={18} className="mt-0.5 shrink-0 text-amber-300" />
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex items-start gap-3 rounded-2xl border border-amber-500/25 bg-amber-500/[0.07] px-4 py-3.5"
+    >
+      <ServerCrash size={18} className="mt-0.5 shrink-0 text-amber-300" aria-hidden="true" />
       <div className="text-sm text-amber-100/90">
         <div className="font-semibold text-amber-200">Daemon offline or unreachable.</div>
         <div className="mt-1 text-amber-100/60">
@@ -307,8 +311,11 @@ export function OfflineHint({ detail }: { detail?: string }) {
 
 export function ErrorNote({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-start gap-2.5 rounded-xl border border-rose-500/25 bg-rose-500/[0.07] px-3 py-2.5 text-sm text-rose-200">
-      <TriangleAlert size={16} className="mt-0.5 shrink-0" />
+    <div
+      role="alert"
+      className="flex items-start gap-2.5 rounded-xl border border-rose-500/25 bg-rose-500/[0.07] px-3 py-2.5 text-sm text-rose-200"
+    >
+      <TriangleAlert size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
       <span>{children}</span>
     </div>
   );
@@ -316,8 +323,12 @@ export function ErrorNote({ children }: { children: ReactNode }) {
 
 export function SuccessNote({ children }: { children: ReactNode }) {
   return (
-    <div className="flex items-start gap-2.5 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.07] px-3 py-2.5 text-sm text-emerald-200">
-      <CircleCheck size={16} className="mt-0.5 shrink-0" />
+    <div
+      role="status"
+      aria-live="polite"
+      className="flex items-start gap-2.5 rounded-xl border border-emerald-500/25 bg-emerald-500/[0.07] px-3 py-2.5 text-sm text-emerald-200"
+    >
+      <CircleCheck size={16} className="mt-0.5 shrink-0" aria-hidden="true" />
       <span>{children}</span>
     </div>
   );

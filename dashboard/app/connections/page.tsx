@@ -341,6 +341,7 @@ function ConnectionCard({
                   value={key}
                   onChange={(e) => setKey(e.target.value)}
                   placeholder={meta.placeholder ?? "Paste your API key"}
+                  aria-label="API key"
                   autoComplete="off"
                   autoFocus
                   className="field font-mono text-xs"

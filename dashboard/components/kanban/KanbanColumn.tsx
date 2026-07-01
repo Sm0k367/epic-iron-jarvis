@@ -48,7 +48,7 @@ export function KanbanColumn({
   const armed = isOver && action !== null;
 
   return (
-    <div className="flex min-w-[270px] flex-1 flex-col">
+    <div className="flex min-w-0 flex-1 flex-col">
       {/* Column header */}
       <div className="mb-3 flex items-center justify-between px-1">
         <div className="flex items-center gap-2.5">

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { useDraggable } from "@dnd-kit/core";
 import { GripVertical, Check, X, Cpu, LoaderCircle } from "lucide-react";
 import type { SessionView } from "@/lib/types";
@@ -110,38 +110,44 @@ export function SessionCard({
   onApprove: () => void;
   onReject: () => void;
 }) {
-  const router = useRouter();
   const { setNodeRef, listeners, attributes, isDragging } = useDraggable({
     id: session.id,
     data: { lane },
   });
 
+  // A stretched <Link> is the keyboard-accessible primary action ("open session").
+  // The card itself is NOT an interactive element, so the drag handle + approve/
+  // reject buttons aren't nested inside a role=button (axe nested-interactive), and
+  // the action is reachable by keyboard (was a click-only div). The content layer is
+  // pointer-events-none so a body click falls through to the link; buttons re-enable.
   return (
-    <div
-      ref={setNodeRef}
-      {...attributes}
-      onClick={() => router.push(`/sessions/${session.id}`)}
-      className="cursor-pointer outline-none focus-visible:ring-2 focus-visible:ring-accent/40 rounded-xl"
-    >
-      <CardInner
-        session={session}
-        lane={lane}
-        dragging={isDragging}
-        busy={busy}
-        onApprove={onApprove}
-        onReject={onReject}
-        dragHandle={
-          <button
-            type="button"
-            aria-label="Drag card"
-            {...listeners}
-            onClick={(e) => e.stopPropagation()}
-            className="-m-1 cursor-grab rounded-md p-1 text-zinc-600 opacity-0 transition-opacity hover:text-zinc-300 active:cursor-grabbing group-hover/card:opacity-100"
-          >
-            <GripVertical size={15} />
-          </button>
-        }
+    <div ref={setNodeRef} className="relative rounded-xl">
+      <Link
+        href={`/sessions/${session.id}`}
+        aria-label={`Open session: ${session.task || "untitled task"}`}
+        className="absolute inset-0 z-0 rounded-xl outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
       />
+      <div className="pointer-events-none relative z-10 [&_button]:pointer-events-auto">
+        <CardInner
+          session={session}
+          lane={lane}
+          dragging={isDragging}
+          busy={busy}
+          onApprove={onApprove}
+          onReject={onReject}
+          dragHandle={
+            <button
+              type="button"
+              aria-label="Drag card"
+              {...listeners}
+              {...attributes}
+              className="-m-1 cursor-grab rounded-md p-1 text-zinc-600 opacity-0 transition-opacity hover:text-zinc-300 active:cursor-grabbing group-hover/card:opacity-100"
+            >
+              <GripVertical size={15} aria-hidden="true" />
+            </button>
+          }
+        />
+      </div>
     </div>
   );
 }

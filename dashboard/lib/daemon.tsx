@@ -9,12 +9,15 @@ import {
   useState,
   type ReactNode,
 } from "react";
-import { ApiError, get } from "./api";
+import { ApiError, get, onUnauthorizedChange } from "./api";
 import type { Health } from "./types";
 
 export interface DaemonState {
   /** True once a /health poll has succeeded; false when the daemon is offline. */
   online: boolean;
+  /** True when a data request was rejected 401/403 (missing/stale token). The
+   *  daemon is reachable but won't accept us until a valid token is entered. */
+  unauthorized: boolean;
   /** Latest /health payload, or null before the first successful poll. */
   health: Health | null;
   /** True until the first poll resolves (so we don't flash "offline" on load). */
@@ -32,11 +35,16 @@ const DaemonContext = createContext<DaemonState | null>(null);
 export function DaemonProvider({ children }: { children: ReactNode }) {
   const [health, setHealth] = useState<Health | null>(null);
   const [online, setOnline] = useState(false);
+  const [unauthorized, setUnauthorized] = useState(false);
   const [checking, setChecking] = useState(true);
   const [nonce, setNonce] = useState(0);
   const firstRef = useRef(true);
 
   const refresh = useCallback(() => setNonce((n) => n + 1), []);
+
+  // A 401/403 from ANY data request (the /health poll is auth-exempt, so it can't
+  // see a bad token) flips this on; the next authorized response clears it.
+  useEffect(() => onUnauthorizedChange(setUnauthorized), []);
 
   useEffect(() => {
     let cancelled = false;
@@ -73,7 +81,7 @@ export function DaemonProvider({ children }: { children: ReactNode }) {
   }, [nonce]);
 
   return (
-    <DaemonContext.Provider value={{ online, health, checking, refresh }}>
+    <DaemonContext.Provider value={{ online, unauthorized, health, checking, refresh }}>
       {children}
     </DaemonContext.Provider>
   );
@@ -83,7 +91,13 @@ export function useDaemon(): DaemonState {
   const ctx = useContext(DaemonContext);
   if (ctx === null) {
     // Safe fallback if a component renders outside the provider.
-    return { online: true, health: null, checking: true, refresh: () => {} };
+    return {
+      online: true,
+      unauthorized: false,
+      health: null,
+      checking: true,
+      refresh: () => {},
+    };
   }
   return ctx;
 }

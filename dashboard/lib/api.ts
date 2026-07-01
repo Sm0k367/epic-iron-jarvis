@@ -61,7 +61,26 @@ export class ApiError extends Error {
   }
 }
 
+// App-wide auth signal: a 401/403 from any DATA request means the bearer token is
+// missing/stale. The /health poll is auth-EXEMPT so it can't detect this — without
+// this, every page silently renders a false "empty install" on a bad token.
+type AuthListener = (unauthorized: boolean) => void;
+const authListeners = new Set<AuthListener>();
+export function onUnauthorizedChange(fn: AuthListener): () => void {
+  authListeners.add(fn);
+  return () => authListeners.delete(fn);
+}
+function signalAuth(unauthorized: boolean): void {
+  authListeners.forEach((fn) => fn(unauthorized));
+}
+
+// Abort a request that hangs (a frozen/slow daemon) so polls surface "offline"
+// instead of spinning forever with stale data and a false-green status.
+const REQUEST_TIMEOUT_MS = 15000;
+
 export async function api<T>(path: string, init?: RequestInit): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
   let res: Response;
   try {
     res = await fetch(`${API_BASE}${path}`, {
@@ -72,12 +91,16 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
         ...(init?.headers || {}),
       },
       cache: "no-store",
+      signal: controller.signal,
     });
   } catch {
-    // Network error => daemon almost certainly offline.
+    // Network error or timeout => daemon offline / not responding.
     throw new ApiError("daemon offline", 0);
+  } finally {
+    clearTimeout(timer);
   }
   if (!res.ok) {
+    if (res.status === 401 || res.status === 403) signalAuth(true);
     let detail = `${res.status} ${res.statusText}`;
     try {
       const body = await res.json();
@@ -87,6 +110,9 @@ export async function api<T>(path: string, init?: RequestInit): Promise<T> {
     }
     throw new ApiError(detail, res.status);
   }
+  // A successful DATA response means the token is good again — clear the signal.
+  // Skip /health (auth-exempt: it succeeds even with a bad token).
+  if (path !== "/health") signalAuth(false);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
 }

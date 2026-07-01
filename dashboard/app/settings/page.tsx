@@ -61,15 +61,18 @@ function toValue(def: FieldDef, raw: unknown): Value {
 function Toggle({
   checked,
   onChange,
+  label,
 }: {
   checked: boolean;
   onChange: (v: boolean) => void;
+  label?: string;
 }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={checked}
+      aria-label={label}
       onClick={() => onChange(!checked)}
       className={`relative h-6 w-11 shrink-0 rounded-full border transition-colors ${
         checked
@@ -228,11 +231,13 @@ export default function SettingsPage() {
                           <Toggle
                             checked={Boolean(form[f.key])}
                             onChange={(v) => update(f.key, v)}
+                            label={f.label}
                           />
                         ) : f.type === "select" ? (
                           <select
                             value={String(form[f.key] ?? "")}
                             onChange={(e) => update(f.key, e.target.value)}
+                            aria-label={f.label}
                             className="field"
                           >
                             {(f.options ?? []).map((opt) => (
@@ -246,6 +251,7 @@ export default function SettingsPage() {
                             type="number"
                             value={Number(form[f.key] ?? 0)}
                             onChange={(e) => update(f.key, Number(e.target.value))}
+                            aria-label={f.label}
                             className="field"
                           />
                         ) : (
@@ -254,6 +260,7 @@ export default function SettingsPage() {
                             value={String(form[f.key] ?? "")}
                             placeholder={f.placeholder}
                             onChange={(e) => update(f.key, e.target.value)}
+                            aria-label={f.label}
                             className="field font-mono text-[13px]"
                           />
                         )}

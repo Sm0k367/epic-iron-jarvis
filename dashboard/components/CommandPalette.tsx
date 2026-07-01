@@ -96,6 +96,7 @@ export function CommandPalette() {
   const [query, setQuery] = useState("");
   const [active, setActive] = useState(0);
   const inputRef = useRef<HTMLInputElement>(null);
+  const prevFocusRef = useRef<HTMLElement | null>(null);
 
   // ⌘K / Ctrl+K toggles; Esc closes.
   useEffect(() => {
@@ -113,10 +114,14 @@ export function CommandPalette() {
 
   useEffect(() => {
     if (open) {
+      // Remember what had focus so we can restore it on close (don't dump focus to
+      // <body> — a keyboard/screen-reader user would lose their place).
+      prevFocusRef.current = document.activeElement as HTMLElement | null;
       setQuery("");
       setActive(0);
-      // focus after the panel mounts
       requestAnimationFrame(() => inputRef.current?.focus());
+    } else {
+      prevFocusRef.current?.focus?.();
     }
   }, [open]);
 
@@ -154,12 +159,23 @@ export function CommandPalette() {
           onClick={() => setOpen(false)}
         >
           <motion.div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Command palette"
             initial={{ opacity: 0, y: -10, scale: 0.98 }}
             animate={{ opacity: 1, y: 0, scale: 1 }}
             exit={{ opacity: 0, y: -10, scale: 0.98 }}
             transition={{ duration: 0.18, ease: [0.22, 1, 0.36, 1] }}
             className="w-full max-w-xl overflow-hidden rounded-2xl border border-white/10 bg-ink-850/95 shadow-card-hover backdrop-blur-xl"
             onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              // Trap Tab within the dialog (the input is the only tab-stop; results
+              // are arrow-key navigated) so focus can't slip behind the overlay.
+              if (e.key === "Tab") {
+                e.preventDefault();
+                inputRef.current?.focus();
+              }
+            }}
           >
             <div className="flex items-center gap-3 border-b hairline px-4 py-3">
               <Search size={16} className="text-accent-soft/80" />

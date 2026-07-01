@@ -284,13 +284,18 @@ export function MobileNav() {
     setOpen(false);
   }, [pathname]);
 
-  // Lock body scroll while the drawer is open.
+  // Lock body scroll + close on Escape while the drawer is open.
   useEffect(() => {
     if (!open) return;
     const prev = document.body.style.overflow;
     document.body.style.overflow = "hidden";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    window.addEventListener("keydown", onKey);
     return () => {
       document.body.style.overflow = prev;
+      window.removeEventListener("keydown", onKey);
     };
   }, [open]);
 
@@ -322,6 +327,9 @@ export function MobileNav() {
             />
             <motion.aside
               key="drawer"
+              role="dialog"
+              aria-modal="true"
+              aria-label="Navigation"
               initial={{ x: "-100%" }}
               animate={{ x: 0 }}
               exit={{ x: "-100%" }}
