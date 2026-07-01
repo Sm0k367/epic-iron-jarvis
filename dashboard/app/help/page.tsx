@@ -141,7 +141,7 @@ export default function HelpPage() {
                     <span className="grid h-9 w-9 place-items-center rounded-xl border border-accent/25 bg-accent/[0.08] text-accent-soft">
                       <Icon size={17} />
                     </span>
-                    <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-500">
+                    <span className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">
                       Step {i + 1}
                     </span>
                   </div>

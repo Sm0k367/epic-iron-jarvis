@@ -88,7 +88,7 @@ export function ModelSwitcher() {
 
       {open && (
         <div className="absolute right-0 z-50 mt-1.5 w-72 rounded-xl border border-white/10 bg-ink-950/95 p-1.5 shadow-card-hover backdrop-blur-xl">
-          <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-zinc-500">
+          <div className="px-2 py-1.5 text-[10px] uppercase tracking-wider text-zinc-400">
             Active model
           </div>
           <div className="max-h-80 overflow-y-auto">

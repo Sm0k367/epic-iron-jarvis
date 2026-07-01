@@ -78,7 +78,7 @@ function HealthItem({
           : "text-zinc-200";
   return (
     <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2">
-      <div className="text-[11px] uppercase tracking-wide text-zinc-500">{label}</div>
+      <div className="text-[11px] uppercase tracking-wide text-zinc-400">{label}</div>
       <div className={`mt-0.5 flex items-center gap-1.5 text-sm font-medium ${tint}`}>
         {(status === "ok" || status === "bad") && <Dot on={status === "ok"} />}
         <span className="truncate" title={value}>

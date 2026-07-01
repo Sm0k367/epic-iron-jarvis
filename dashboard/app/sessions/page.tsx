@@ -264,11 +264,12 @@ export default function SessionsPage() {
                               <Link
                                 href={`/sessions/${s.id}`}
                                 className="flex items-center gap-2"
-                                title={s.task}
+                                title={s.task || "Untitled session"}
+                                aria-label={s.task || "Untitled session"}
                               >
                                 <StatusDot status={s.status} />
                                 <span className="block max-w-md truncate text-zinc-100 transition-colors group-hover:text-accent-soft">
-                                  {s.task}
+                                  {s.task || "Untitled session"}
                                 </span>
                                 <ArrowUpRight
                                   size={13}

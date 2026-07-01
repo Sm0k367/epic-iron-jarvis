@@ -82,7 +82,7 @@ export function Stat({
         }`}
       />
       <div className="flex items-center justify-between">
-        <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-500">
+        <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">
           {label}
         </div>
         {icon && <span className="text-accent-soft/70">{icon}</span>}
@@ -336,7 +336,7 @@ export function SuccessNote({ children }: { children: ReactNode }) {
 
 export function SectionLabel({ children }: { children: ReactNode }) {
   return (
-    <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-500">
+    <div className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">
       {children}
     </div>
   );

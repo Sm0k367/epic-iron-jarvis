@@ -209,7 +209,7 @@ export function DirectoryTree({
         <>
           {/* Drive / root selector */}
           <div className="shrink-0 border-b border-white/[0.06] px-4 py-3">
-            <label className="mb-1.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+            <label className="mb-1.5 block text-[10px] uppercase tracking-[0.12em] text-zinc-400">
               Root
             </label>
             <select
@@ -230,7 +230,7 @@ export function DirectoryTree({
 
           {/* Selected directory + open-terminal-here action */}
           <div className="shrink-0 border-b border-white/[0.06] px-4 py-3">
-            <div className="text-[10px] uppercase tracking-[0.12em] text-zinc-500">
+            <div className="text-[10px] uppercase tracking-[0.12em] text-zinc-400">
               Selected
             </div>
             <div
