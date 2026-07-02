@@ -1,20 +1,70 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, BookOpen } from "lucide-react";
+import { Sparkles, BookOpen, Plus, Save } from "lucide-react";
 import { useApi } from "@/lib/useApi";
+import { post, ApiError } from "@/lib/api";
 import type { Skill, SkillDetail } from "@/lib/types";
-import { Card, Spinner, OfflineHint, Empty, SkeletonRows } from "@/components/ui";
+import {
+  Card,
+  Spinner,
+  OfflineHint,
+  Empty,
+  SkeletonRows,
+  SuccessNote,
+  ErrorNote,
+  LoaderInline,
+} from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 
 export default function SkillsPage() {
-  const { data, error, loading } = useApi<{ skills: Skill[] }>("/skills");
+  const { data, error, loading, reload } = useApi<{ skills: Skill[] }>("/skills");
   const [selected, setSelected] = useState<string | null>(null);
   const detail = useApi<SkillDetail>(selected ? `/skills/${selected}` : null, [selected]);
 
+  // --- New-skill form state -------------------------------------------------
+  const [showForm, setShowForm] = useState(false);
+  const [name, setName] = useState("");
+  const [description, setDescription] = useState("");
+  const [instructions, setInstructions] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
+  const [created, setCreated] = useState<string | null>(null);
+
   const offline = error && error.status === 0;
   const skills = data?.skills ?? [];
+  const canSubmit = !busy && name.trim().length > 0 && instructions.trim().length > 0;
+
+  function resetForm() {
+    setName("");
+    setDescription("");
+    setInstructions("");
+    setFormError(null);
+  }
+
+  async function createSkill(e: React.FormEvent) {
+    e.preventDefault();
+    if (!canSubmit) return;
+    setBusy(true);
+    setFormError(null);
+    setCreated(null);
+    try {
+      await post("/skills", {
+        name: name.trim(),
+        description: description.trim(),
+        instructions: instructions.trim(),
+      });
+      setCreated(name.trim());
+      setShowForm(false);
+      resetForm();
+      reload();
+    } catch (err) {
+      setFormError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
 
   return (
     <PageShell>
@@ -22,6 +72,18 @@ export default function SkillsPage() {
         <PageHeader
           title="Skills"
           subtitle="Reusable skills your agents can call on to handle specialized tasks faster."
+          actions={
+            <button
+              onClick={() => {
+                setShowForm((v) => !v);
+                setCreated(null);
+                setFormError(null);
+              }}
+              className={`${showForm ? "btn-ghost" : "btn-accent"} py-1.5 text-xs`}
+            >
+              <Plus size={14} /> New skill
+            </button>
+          }
         />
       </Reveal>
       {offline && (
@@ -30,9 +92,94 @@ export default function SkillsPage() {
         </Reveal>
       )}
 
+      {created && !showForm && (
+        <Reveal>
+          <SuccessNote>Skill &ldquo;{created}&rdquo; created.</SuccessNote>
+        </Reveal>
+      )}
+
       <Reveal>
         <div className="grid gap-6 lg:grid-cols-3">
-          <div className="lg:col-span-1">
+          <div className="space-y-6 lg:col-span-1">
+            {showForm && (
+              <Card title="New skill" icon={<Plus size={15} />}>
+                <form onSubmit={createSkill} className="space-y-3">
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">
+                      Name
+                    </label>
+                    <input
+                      type="text"
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="e.g. summarize-pdf"
+                      aria-label="Skill name"
+                      autoComplete="off"
+                      autoFocus
+                      className="field text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">
+                      Description
+                    </label>
+                    <input
+                      type="text"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      placeholder="One line on when to use it"
+                      aria-label="Skill description"
+                      autoComplete="off"
+                      className="field text-sm"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">
+                      Instructions
+                    </label>
+                    <textarea
+                      value={instructions}
+                      onChange={(e) => setInstructions(e.target.value)}
+                      placeholder={"# How to…\n\nStep-by-step guidance the agent follows."}
+                      aria-label="Skill instructions"
+                      rows={8}
+                      className="field font-mono text-xs leading-relaxed"
+                    />
+                    <p className="text-[11px] leading-relaxed text-zinc-500">
+                      Instructions are what an agent reads when it uses this skill — write
+                      them like a how-to.
+                    </p>
+                  </div>
+                  {formError && <ErrorNote>{formError}</ErrorNote>}
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="submit"
+                      disabled={!canSubmit}
+                      className="btn-accent flex-1 py-1.5 text-xs"
+                    >
+                      {busy ? (
+                        <LoaderInline label="Creating…" />
+                      ) : (
+                        <>
+                          <Save size={14} /> Create skill
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setShowForm(false);
+                        resetForm();
+                      }}
+                      className="btn-ghost py-1.5 text-xs"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </form>
+              </Card>
+            )}
+
             <Card title={`Available · ${skills.length}`} icon={<Sparkles size={15} />}>
               {loading && !data ? (
                 <SkeletonRows rows={5} />

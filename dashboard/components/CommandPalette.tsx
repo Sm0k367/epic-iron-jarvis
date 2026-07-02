@@ -12,6 +12,7 @@ import {
   Plus,
   CornerDownLeft,
   LayoutDashboard,
+  MessageSquare,
   Boxes,
   Bot,
   Sparkles,
@@ -61,6 +62,7 @@ const COMMANDS: Command[] = [
   { id: "open-templates", label: "Open task templates", hint: "Action", icon: LayoutTemplate, href: "/templates", keywords: "preset saved reusable task template" },
   // ── Jump to ──────────────────────────────────────────────────────────────
   { id: "overview", label: "Overview", hint: "Work", icon: LayoutDashboard, href: "/", keywords: "home dashboard health metrics" },
+  { id: "chat", label: "Chat", hint: "Work", icon: MessageSquare, href: "/chat", keywords: "talk ask agent assistant conversation message tool" },
   { id: "sessions", label: "Sessions", hint: "Work", icon: Boxes, href: "/sessions", keywords: "runs history" },
   { id: "kanban", label: "Kanban", hint: "Work", icon: SquareKanban, href: "/kanban", keywords: "board tasks status" },
   { id: "templates", label: "Templates", hint: "Work", icon: LayoutTemplate, href: "/templates", keywords: "preset saved reusable" },

@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useRef, useState, type ReactNode } from "react";
 import {
   Wrench,
   Plus,
@@ -10,6 +10,17 @@ import {
   User,
   X,
   Info,
+  Boxes,
+  Check,
+  Globe,
+  Radio,
+  Search,
+  FolderOpen,
+  FileText,
+  HardDrive,
+  GitBranch,
+  FileArchive,
+  ExternalLink,
 } from "lucide-react";
 import { post, del, ApiError } from "@/lib/api";
 import { usePolledApi } from "@/lib/useApi";
@@ -67,6 +78,123 @@ function tokenize(command: string): string[] {
     .map((t) => t.trim())
     .filter(Boolean);
 }
+
+/* -------------------------------------------------------------------------- */
+/*  Tool suite — curated, one-click, Windows-friendly prebuilt tools           */
+/* -------------------------------------------------------------------------- */
+
+/** A ready-made tool template posted verbatim to POST /tools/custom. */
+interface SuiteTool {
+  name: string;
+  description: string;
+  parameters: ToolParam[];
+  command: string[];
+  timeout_seconds: number;
+  icon: ReactNode;
+}
+
+/** Shorthand for a required string parameter (the only kind the suite needs). */
+function strParam(name: string, description: string): ToolParam {
+  return { name, type: "string", required: true, description };
+}
+
+/**
+ * The curated gallery. Commands are argv (no shell), so {placeholder} tokens —
+ * which the daemon fills from the declared parameters — are injection-safe.
+ * Everything here targets Windows (PowerShell / cmd built-ins).
+ */
+const TOOL_SUITE: SuiteTool[] = [
+  {
+    name: "http_get",
+    description: "Fetch a URL and print the response.",
+    parameters: [strParam("url", "The URL to fetch.")],
+    command: ["curl", "-s", "{url}"],
+    timeout_seconds: 30,
+    icon: <Globe size={14} className="text-accent-soft" />,
+  },
+  {
+    name: "ping_host",
+    description: "Ping a host 4 times.",
+    parameters: [strParam("host", "Hostname or IP address to ping.")],
+    command: ["ping", "-n", "4", "{host}"],
+    timeout_seconds: 30,
+    icon: <Radio size={14} className="text-accent-soft" />,
+  },
+  {
+    name: "dns_lookup",
+    description: "DNS lookup for a hostname.",
+    parameters: [strParam("host", "Hostname to resolve.")],
+    command: ["nslookup", "{host}"],
+    timeout_seconds: 20,
+    icon: <Search size={14} className="text-accent-soft" />,
+  },
+  {
+    name: "list_dir",
+    description: "List a directory.",
+    parameters: [strParam("path", "Directory path to list.")],
+    command: ["powershell", "-NoProfile", "-Command", "Get-ChildItem -Force '{path}'"],
+    timeout_seconds: 20,
+    icon: <FolderOpen size={14} className="text-accent-soft" />,
+  },
+  {
+    name: "word_count",
+    description: "Count words in a text file.",
+    parameters: [strParam("file", "Path to the text file.")],
+    command: [
+      "powershell",
+      "-NoProfile",
+      "-Command",
+      "(Get-Content '{file}' -Raw | Measure-Object -Word).Words",
+    ],
+    timeout_seconds: 30,
+    icon: <FileText size={14} className="text-accent-soft" />,
+  },
+  {
+    name: "disk_free",
+    description: "Show free disk space.",
+    parameters: [],
+    command: [
+      "powershell",
+      "-NoProfile",
+      "-Command",
+      "Get-PSDrive -PSProvider FileSystem | Select-Object Name,Used,Free",
+    ],
+    timeout_seconds: 20,
+    icon: <HardDrive size={14} className="text-accent-soft" />,
+  },
+  {
+    name: "git_status",
+    description: "git status of a repo.",
+    parameters: [strParam("repo", "Path to the git repository.")],
+    command: ["git", "-C", "{repo}", "status", "--short"],
+    timeout_seconds: 30,
+    icon: <GitBranch size={14} className="text-accent-soft" />,
+  },
+  {
+    name: "zip_folder",
+    description: "Zip a folder.",
+    parameters: [
+      strParam("source", "Folder (or path) to compress."),
+      strParam("dest", "Destination .zip path."),
+    ],
+    command: [
+      "powershell",
+      "-NoProfile",
+      "-Command",
+      "Compress-Archive -Path '{source}' -DestinationPath '{dest}' -Force",
+    ],
+    timeout_seconds: 120,
+    icon: <FileArchive size={14} className="text-accent-soft" />,
+  },
+  {
+    name: "open_url",
+    description: "Open a URL in the default browser.",
+    parameters: [strParam("url", "The URL to open.")],
+    command: ["powershell", "-NoProfile", "-Command", "Start-Process '{url}'"],
+    timeout_seconds: 15,
+    icon: <ExternalLink size={14} className="text-accent-soft" />,
+  },
+];
 
 export default function ToolsPage() {
   const { data, error, loading, reload } = usePolledApi<{ tools: CustomTool[] }>(
@@ -155,6 +283,33 @@ export default function ToolsPage() {
       reload();
     } catch (err) {
       setFormError(err instanceof ApiError ? err.message : String(err));
+    }
+  }
+
+  // Tool suite (one-click add) --------------------------------------------
+  const installed = new Set(tools.map((t) => t.name));
+  const [adding, setAdding] = useState<string | null>(null);
+  const [suiteError, setSuiteError] = useState<string | null>(null);
+  const [suiteOk, setSuiteOk] = useState<string | null>(null);
+
+  async function addFromSuite(t: SuiteTool) {
+    setAdding(t.name);
+    setSuiteError(null);
+    setSuiteOk(null);
+    try {
+      await post<{ name: string }>("/tools/custom", {
+        name: t.name,
+        description: t.description,
+        parameters: t.parameters,
+        command: t.command,
+        timeout_seconds: t.timeout_seconds,
+      });
+      setSuiteOk(`Tool "${t.name}" added.`);
+      reload();
+    } catch (err) {
+      setSuiteError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setAdding(null);
     }
   }
 
@@ -503,6 +658,117 @@ export default function ToolsPage() {
             </Card>
           </div>
         </div>
+      </Reveal>
+
+      {/* ------------------------------------------------------------------ */}
+      {/*  Tool suite — curated, one-click ready-made tools                  */}
+      {/* ------------------------------------------------------------------ */}
+      <Reveal>
+        <Card
+          title={`Tool suite · ${TOOL_SUITE.length}`}
+          icon={<Boxes size={15} />}
+        >
+          <p className="mb-4 text-sm text-zinc-400">
+            Ready-made, Windows-friendly tools. Click{" "}
+            <span className="font-medium text-accent-soft">Add</span> and every agent
+            can call it by name — no setup required.
+          </p>
+          {suiteOk && (
+            <div className="mb-3">
+              <SuccessNote>{suiteOk}</SuccessNote>
+            </div>
+          )}
+          {suiteError && (
+            <div className="mb-3">
+              <ErrorNote>{suiteError}</ErrorNote>
+            </div>
+          )}
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {TOOL_SUITE.map((t) => {
+              const added = installed.has(t.name);
+              const isAdding = adding === t.name;
+              return (
+                <div
+                  key={t.name}
+                  className="flex flex-col rounded-xl border border-white/[0.06] bg-white/[0.015] p-4 transition-colors hover:border-white/10 hover:bg-white/[0.03]"
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      {t.icon}
+                      <span className="truncate font-mono text-sm font-semibold text-zinc-100">
+                        {t.name}
+                      </span>
+                    </div>
+                    {added ? (
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-emerald-500/30 bg-emerald-500/[0.1] px-2 py-1 text-[11px] font-medium text-emerald-300">
+                        <Check size={12} /> Added
+                      </span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => addFromSuite(t)}
+                        disabled={isAdding}
+                        title={`Add "${t.name}"`}
+                        className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-accent/30 bg-accent/[0.08] px-2 py-1 text-[11px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+                      >
+                        {isAdding ? (
+                          <LoaderInline label="Adding…" />
+                        ) : (
+                          <>
+                            <Plus size={12} /> Add
+                          </>
+                        )}
+                      </button>
+                    )}
+                  </div>
+
+                  <p className="mt-2 text-[13px] text-zinc-400">{t.description}</p>
+
+                  {/* argv command preview */}
+                  <div className="mt-3 flex flex-wrap gap-1">
+                    {t.command.map((tok, i) => {
+                      const isPh = /^\{.+\}$/.test(tok);
+                      return (
+                        <span
+                          key={i}
+                          className={`rounded-md border px-1.5 py-0.5 font-mono text-[11px] ${
+                            isPh
+                              ? "border-accent/30 bg-accent/[0.08] text-accent-soft"
+                              : "border-white/[0.06] bg-white/[0.03] text-zinc-300"
+                          }`}
+                        >
+                          {tok}
+                        </span>
+                      );
+                    })}
+                  </div>
+
+                  {/* parameter chips */}
+                  {t.parameters.length > 0 && (
+                    <div className="mt-2.5 flex flex-wrap gap-1.5">
+                      {t.parameters.map((p) => (
+                        <span
+                          key={p.name}
+                          title={p.description || undefined}
+                          className="inline-flex items-center gap-1 rounded-md border border-white/[0.07] bg-white/[0.03] px-1.5 py-0.5 font-mono text-[11px] text-zinc-300"
+                        >
+                          {p.name}
+                          {p.required && (
+                            <span className="text-rose-300" title="required">
+                              *
+                            </span>
+                          )}
+                          <span className="text-zinc-600">{p.type}</span>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </Card>
       </Reveal>
     </PageShell>
   );

@@ -8,12 +8,46 @@ subfolders are discovered as filename lists.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
 
 SKILL_FILE = "SKILL.md"
+
+
+def slugify(name: str) -> str:
+    """A safe directory slug for a skill name (letters/digits/dash)."""
+    slug = re.sub(r"[^a-z0-9]+", "-", (name or "").strip().lower()).strip("-")
+    return slug or "skill"
+
+
+def save_skill(skills_root: Path, name: str, description: str, instructions: str) -> Path:
+    """Write a user-authored ``<skills_root>/<slug>/SKILL.md`` and return its dir.
+
+    The frontmatter carries the display name + description; the body is the
+    instructions. Overwrites an existing skill of the same slug (edit in place).
+    Raises ``ValueError`` on an empty name or empty instructions.
+    """
+    name = (name or "").strip()
+    instructions = (instructions or "").strip()
+    if not name:
+        raise ValueError("skill name is required")
+    if not instructions:
+        raise ValueError("skill instructions are required")
+    skill_dir = Path(skills_root) / slugify(name)
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    # yaml.safe_dump escapes special chars, so a name with ':' or quotes is safe.
+    front = yaml.safe_dump(
+        {"name": name, "description": (description or "").strip()},
+        sort_keys=False,
+        allow_unicode=True,
+    ).strip()
+    (skill_dir / SKILL_FILE).write_text(
+        f"---\n{front}\n---\n\n{instructions}\n", encoding="utf-8"
+    )
+    return skill_dir
 
 
 @dataclass

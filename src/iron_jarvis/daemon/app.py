@@ -136,6 +136,14 @@ class OAuthCompleteBody(BaseModel):
     state: str = ""
 
 
+class SkillCreate(BaseModel):
+    """Author a new user skill from the dashboard."""
+
+    name: str
+    description: str = ""
+    instructions: str
+
+
 class TerminalAIBody(BaseModel):
     """Per-terminal AI assist: a question + an optional per-PANE model choice."""
 
@@ -1202,6 +1210,31 @@ def create_app(project_root: str | None = None) -> FastAPI:
         if sk is None:
             raise HTTPException(status_code=404, detail="no such skill")
         return {"name": sk.name, "description": sk.description, "instructions": sk.instructions}
+
+    @app.post("/skills")
+    def create_skill(body: SkillCreate) -> dict[str, Any]:
+        """Author a new skill (name + description + instructions).
+
+        Persists ``<home>/skills/<slug>/SKILL.md`` and re-discovers so it shows
+        up immediately — user skills sit alongside the built-ins and are
+        searchable/injectable by agents exactly the same way.
+        """
+        from ..skills import builtin_dir as _builtin_dir
+        from ..skills import save_skill as _save_skill
+
+        try:
+            _save_skill(
+                platform.config.home / "skills",
+                body.name,
+                body.description,
+                body.instructions,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        # Re-discover so the new skill is live without a restart.
+        platform.skills.discover(_builtin_dir(), platform.config.home / "skills")
+        sk = platform.skills.get(body.name.strip())
+        return {"name": sk.name if sk else body.name, "created": True}
 
     # --- Artifacts (§26) --------------------------------------------------
 

@@ -6,6 +6,7 @@ import { usePathname } from "next/navigation";
 import { AnimatePresence, motion } from "framer-motion";
 import {
   LayoutDashboard,
+  MessageSquare,
   Boxes,
   SquareKanban,
   Sparkles,
@@ -57,6 +58,7 @@ const NAV: NavSection[] = [
     label: "Work",
     items: [
       { href: "/", label: "Overview", icon: LayoutDashboard },
+      { href: "/chat", label: "Chat", icon: MessageSquare },
       { href: "/sessions", label: "Sessions", icon: Boxes },
       { href: "/kanban", label: "Kanban", icon: SquareKanban },
       { href: "/templates", label: "Templates", icon: LayoutTemplate },
