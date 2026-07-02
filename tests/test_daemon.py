@@ -10,7 +10,10 @@ def test_health_tools_and_session_flow(tmp_path):
 
     health = client.get("/health").json()
     assert health["status"] == "ok"
-    assert any(p["provider"] == "mock" for p in health["providers"])
+    # The internal 'mock' offline model is HIDDEN from user-facing lists (it
+    # stays the engine's silent fallback); a real provider is always listed.
+    assert not any(p["provider"] == "mock" for p in health["providers"])
+    assert any(p["provider"] == "anthropic" for p in health["providers"])
 
     tools = client.get("/tools").json()
     assert any(s["name"] == "write_file" for s in tools["tools"])

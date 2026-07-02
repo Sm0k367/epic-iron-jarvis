@@ -8,7 +8,9 @@ import {
   FileText,
   Plus,
   FolderPlus,
+  FolderOpen,
   Layers,
+  X,
 } from "lucide-react";
 import { get, post, del, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
@@ -27,6 +29,7 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
+import { DirectoryTree } from "@/components/terminal/DirectoryTree";
 
 const DEFAULT_SOURCES = ["brain", "obsidian", "notion"];
 
@@ -75,6 +78,21 @@ export default function LtmPage() {
   const [srcBusy, setSrcBusy] = useState(false);
   const [srcError, setSrcError] = useState<string | null>(null);
   const [srcOk, setSrcOk] = useState<string | null>(null);
+
+  // Folder browser (for the markdown-source path). `browsePick` tracks the
+  // directory highlighted in the tree before the user confirms it.
+  const [browseOpen, setBrowseOpen] = useState(false);
+  const [browsePick, setBrowsePick] = useState<string | null>(null);
+
+  function openBrowse() {
+    setBrowsePick(srcPath.trim() || null);
+    setBrowseOpen(true);
+  }
+
+  function useFolder(path: string) {
+    if (path) setSrcPath(path);
+    setBrowseOpen(false);
+  }
 
   async function search(e: React.FormEvent) {
     e.preventDefault();
@@ -376,14 +394,24 @@ export default function LtmPage() {
                     <label className="mb-1.5 block text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                       Folder path
                     </label>
-                    <input
-                      value={srcPath}
-                      onChange={(e) => setSrcPath(e.target.value)}
-                      placeholder="C:\\Users\\me\\notes"
-                      className="field font-mono"
-                    />
+                    <div className="flex items-stretch gap-2">
+                      <input
+                        value={srcPath}
+                        onChange={(e) => setSrcPath(e.target.value)}
+                        placeholder="C:\\Users\\me\\notes"
+                        className="field flex-1 font-mono"
+                      />
+                      <button
+                        type="button"
+                        onClick={openBrowse}
+                        title="Browse for a folder on this machine"
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.02] px-3 text-[13px] font-medium text-zinc-300 transition-colors hover:border-accent/30 hover:bg-accent/[0.08] hover:text-accent-soft"
+                      >
+                        <FolderOpen size={14} /> Browse
+                      </button>
+                    </div>
                     <div className="mt-1 text-[11px] text-zinc-600">
-                      A local folder of .md files to index.
+                      A local folder of .md files to index — type a path or Browse to pick one.
                     </div>
                   </div>
                 ) : (
@@ -469,6 +497,71 @@ export default function LtmPage() {
           </div>
         </div>
       </Reveal>
+
+      {/* Folder browser modal — pick a markdown folder off the machine ------- */}
+      {browseOpen && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4 backdrop-blur-sm"
+          onClick={() => setBrowseOpen(false)}
+        >
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Pick a markdown folder"
+            onClick={(e) => e.stopPropagation()}
+            className="flex max-h-[82vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-white/10 bg-ink-850/95 shadow-card-hover backdrop-blur-xl"
+          >
+            <header className="flex items-center gap-2 border-b hairline px-4 py-3">
+              <FolderOpen size={16} className="text-accent-soft/80" />
+              <h2 className="text-[13px] font-semibold tracking-wide text-zinc-200">
+                Pick a markdown folder
+              </h2>
+              <button
+                type="button"
+                onClick={() => setBrowseOpen(false)}
+                title="Close"
+                className="ml-auto grid h-6 w-6 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
+              >
+                <X size={14} />
+              </button>
+            </header>
+
+            <div className="min-h-0 flex-1 p-3">
+              <div className="h-[56vh]">
+                <DirectoryTree
+                  selectedPath={browsePick}
+                  onSelect={setBrowsePick}
+                  hideAction
+                />
+              </div>
+            </div>
+
+            <footer className="flex items-center gap-3 border-t hairline px-4 py-3">
+              <div
+                className="min-w-0 flex-1 truncate font-mono text-[12px] text-accent-soft"
+                title={browsePick ?? undefined}
+              >
+                {browsePick ?? "— select a folder —"}
+              </div>
+              <button
+                type="button"
+                onClick={() => setBrowseOpen(false)}
+                className="btn-ghost py-1.5 text-[13px]"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => browsePick && useFolder(browsePick)}
+                disabled={!browsePick}
+                className="btn-accent py-1.5 text-[13px]"
+              >
+                Use this folder
+              </button>
+            </footer>
+          </div>
+        </div>
+      )}
     </PageShell>
   );
 }

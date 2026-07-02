@@ -231,6 +231,16 @@ class WorkflowSaveBody(BaseModel):
     description: str = ""
 
 
+class WorkflowGenerateBody(BaseModel):
+    """Build/refine a workflow from a natural-language description via an agent."""
+
+    description: str
+    name: str = ""
+    current: list[dict] = []  # existing steps to refine (optional)
+    provider: str = ""
+    model: str = ""
+
+
 class FeedbackBody(BaseModel):
     rating: str = "up"  # up | down | neutral
     comment: str = ""
@@ -736,6 +746,15 @@ def create_app(project_root: str | None = None) -> FastAPI:
         task.add_done_callback(_done)
         return task
 
+    def _visible_providers() -> list[dict[str, Any]]:
+        """Provider health with the internal 'mock' offline model hidden.
+
+        'mock' is the load-bearing offline fallback + the autopromote sentinel,
+        so it stays in the ENGINE — but it must not surface as a selectable
+        model/tile in the UI (pickers, connections, the switcher). Filtered here
+        (and in /models + /connections) rather than removed from the registry."""
+        return [p for p in platform.providers.health() if p.get("provider") != "mock"]
+
     @app.get("/health")
     def health() -> dict[str, Any]:
         return {
@@ -743,7 +762,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "version": __version__,
             "default_provider": platform.config.default_provider,
             "default_model": platform.config.default_model,
-            "providers": platform.providers.health(),
+            "providers": _visible_providers(),
         }
 
     @app.get("/tools")
@@ -752,7 +771,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     @app.get("/providers")
     def providers() -> dict[str, Any]:
-        return {"providers": platform.providers.health()}
+        return {"providers": _visible_providers()}
 
     @app.post("/sessions")
     async def create_session(body: SessionCreate) -> dict[str, Any]:
@@ -1287,7 +1306,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
     @app.get("/connections")
     def connections() -> dict[str, Any]:
-        return {"connections": platform.connections.status()}
+        # Hide the internal offline 'mock' provider — it's an engine fallback,
+        # not something the user connects/manages.
+        return {
+            "connections": [
+                c for c in platform.connections.status() if c.get("provider") != "mock"
+            ]
+        }
 
     #: A sane default model per provider, used when auto-promoting the FIRST real
     #: connection away from the out-of-box "mock" default (see _maybe_autopromote).
@@ -1768,6 +1793,102 @@ def create_app(project_root: str | None = None) -> FastAPI:
         if rec is None:
             raise HTTPException(status_code=404, detail="no such workflow")
         return rec.model_dump()
+
+    @app.post("/workflows/generate")
+    async def generate_workflow(body: WorkflowGenerateBody) -> dict[str, Any]:
+        """Build (or refine) a workflow from a natural-language description.
+
+        An agent turns the request into a ``{name, description, steps}`` workflow
+        (steps = ``{name, agent, task, tool?}``), saves it, and returns it so the
+        editor can load it. Refinement: pass ``current`` (the steps in the
+        editor) and the new instruction.
+        """
+        import json as _json
+
+        from ..providers.adapters.base import LLMMessage
+
+        provider = body.provider or platform.config.default_provider
+        model = body.model or platform.config.default_model
+        try:
+            adapter = platform.providers.get(provider, model)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+
+        system = (
+            "You design Iron Jarvis workflows. A workflow is a repeatable, ordered "
+            "list of steps. Respond with ONLY a JSON object (no prose, no code "
+            "fence) of the exact shape: "
+            '{"name": "kebab-case-name", "description": "one line", '
+            '"steps": [{"name": "Step name", "agent": "builder", "task": '
+            '"a clear instruction for this step", "tool": null}]}. '
+            "agent MUST be one of: builder, planner, researcher, reviewer, "
+            "supervisor. Keep tasks concrete and self-contained. Prefer 2-6 steps."
+        )
+        user = f"Create a workflow for this request:\n\n{body.description}"
+        if body.current:
+            user += (
+                "\n\nRefine THIS existing workflow (return the full updated "
+                f"workflow):\n{_json.dumps(body.current)}"
+            )
+        try:
+            resp = await adapter.complete(
+                system=system,
+                messages=[LLMMessage(role="user", content=user)],
+                tools=[],
+            )
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=502, detail=str(exc))
+
+        # Extract the first JSON object from the reply (tolerant of stray prose).
+        text = resp.text or ""
+        start, depth, obj = text.find("{"), 0, ""
+        if start >= 0:
+            for i in range(start, len(text)):
+                depth += (text[i] == "{") - (text[i] == "}")
+                if depth == 0:
+                    obj = text[start : i + 1]
+                    break
+        try:
+            wf = _json.loads(obj)
+            raw_steps = wf.get("steps") or []
+        except Exception:  # noqa: BLE001
+            raise HTTPException(
+                status_code=422,
+                detail="the model did not return a valid workflow — try rephrasing",
+            )
+
+        valid_agents = {"builder", "planner", "researcher", "reviewer", "supervisor"}
+        steps: list[dict[str, Any]] = []
+        for s in raw_steps:
+            if not isinstance(s, dict) or not (s.get("task") or s.get("name")):
+                continue
+            agent = str(s.get("agent") or "builder").lower()
+            steps.append(
+                {
+                    "name": str(s.get("name") or s.get("task") or "step")[:80],
+                    "agent": agent if agent in valid_agents else "builder",
+                    "task": str(s.get("task") or ""),
+                    "tool": s.get("tool") or None,
+                }
+            )
+        if not steps:
+            raise HTTPException(status_code=422, detail="no usable steps were generated")
+
+        import re as _re
+
+        name = body.name or wf.get("name") or "generated-workflow"
+        name = _re.sub(r"[^a-zA-Z0-9_-]+", "-", str(name).strip().lower()).strip("-") or "workflow"
+        description = str(wf.get("description") or body.description)[:200]
+
+        from ..workflows.store import WorkflowStore
+
+        WorkflowStore(platform.engine).save(name, steps, description=description)
+        return {
+            "name": name,
+            "description": description,
+            "steps": steps,
+            "reply": f"Built **{name}** with {len(steps)} step(s). Loaded into the editor — tweak and Run when ready.",
+        }
 
     # Saved prompts / task templates (one-click re-run of a frequent task).
     @app.get("/templates")
@@ -2375,7 +2496,9 @@ def create_app(project_root: str | None = None) -> FastAPI:
     def list_models() -> dict[str, Any]:
         from ..agents.dynamic import available_models
 
-        models = available_models()
+        # Hide the internal offline 'mock' model — not a selectable option in
+        # the pickers (it stays the engine's silent fallback).
+        models = [m for m in available_models() if m.get("provider") != "mock"]
         # Config-driven entries LIGHT UP once configured: the local model and
         # the custom endpoint appear in every picker (topbar switcher, New
         # Session, per-terminal AI) without hardcoding dead options.

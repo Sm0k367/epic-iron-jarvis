@@ -174,11 +174,16 @@ export function DirectoryTree({
   selectedPath,
   onSelect,
   onOpenTerminal,
+  hideAction = false,
 }: {
   selectedPath: string | null;
   onSelect: (path: string) => void;
-  /** Create a new terminal whose cwd is the selected directory. */
-  onOpenTerminal: (path: string) => void;
+  /** Create a new terminal whose cwd is the selected directory. Optional so the
+   *  tree can be reused as a plain folder PICKER (e.g. the LTM page), where the
+   *  parent provides its own confirm button. */
+  onOpenTerminal?: (path: string) => void;
+  /** Hide the built-in "Open terminal here" action (picker-only reuse). */
+  hideAction?: boolean;
 }) {
   const { data, error, loading } = useApi<{ drives: Drive[] }>("/fs/drives");
   const drives = data?.drives ?? [];
@@ -239,13 +244,15 @@ export function DirectoryTree({
             >
               {selectedPath ?? "— pick a folder below —"}
             </div>
-            <button
-              onClick={() => selectedPath && onOpenTerminal(selectedPath)}
-              disabled={!selectedPath}
-              className="btn-accent mt-2.5 w-full py-1.5 text-[12px]"
-            >
-              <SquareTerminal size={13} /> Open terminal here →
-            </button>
+            {!hideAction && onOpenTerminal && (
+              <button
+                onClick={() => selectedPath && onOpenTerminal(selectedPath)}
+                disabled={!selectedPath}
+                className="btn-accent mt-2.5 w-full py-1.5 text-[12px]"
+              >
+                <SquareTerminal size={13} /> Open terminal here →
+              </button>
+            )}
           </div>
 
           {/* The tree itself */}

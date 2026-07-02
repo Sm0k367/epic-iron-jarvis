@@ -1,9 +1,18 @@
 "use client";
 
-import { useEffect } from "react";
-import { History } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  History,
+  MessageSquare,
+  Send,
+  Sparkles,
+  Loader2,
+  Bot,
+  User,
+} from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
+import { post, ApiError } from "@/lib/api";
 import type { WorkflowRun } from "@/lib/types";
 import { Card, Badge, Empty, SkeletonRows } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
@@ -17,16 +26,171 @@ export default function WorkflowsPage() {
       <Reveal>
         <PageHeader
           title="Workflows"
-          subtitle="Wire agents into a visual, multi-step workflow, then run it."
+          subtitle="Wire agents into a visual, multi-step workflow, then run it — or describe one below and let the agent build it."
         />
       </Reveal>
       <Reveal>
         <WorkflowCanvas />
       </Reveal>
       <Reveal>
+        <WorkflowBuilderChat />
+      </Reveal>
+      <Reveal>
         <RunHistory />
       </Reveal>
     </PageShell>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Build-with-chat: describe a workflow, an agent builds it into the editor   */
+/* -------------------------------------------------------------------------- */
+
+type WfStep = { name: string; agent: string; task: string; tool: string | null };
+type ChatMsg = { role: "user" | "assistant"; content: string };
+
+const EXAMPLES = [
+  "Research a topic, draft a summary, then review it",
+  "Pull my open tasks, prioritize them, and write a plan for today",
+  "Read a folder of docs, extract the key points, and save a brief",
+];
+
+function WorkflowBuilderChat() {
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [input, setInput] = useState("");
+  const [busy, setBusy] = useState(false);
+  const threadRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    threadRef.current?.scrollTo({ top: threadRef.current.scrollHeight, behavior: "smooth" });
+  }, [messages, busy]);
+
+  async function send(text: string) {
+    const msg = text.trim();
+    if (!msg || busy) return;
+    setInput("");
+    setMessages((m) => [...m, { role: "user", content: msg }]);
+    setBusy(true);
+    try {
+      const res = await post<{ name: string; description: string; steps: WfStep[]; reply: string }>(
+        "/workflows/generate",
+        { description: msg },
+      );
+      // Load the generated steps into the editor above (WorkflowCanvas listens
+      // for this event and rebuilds its graph — the same code path as "Load").
+      window.dispatchEvent(
+        new CustomEvent("ij:load-workflow", {
+          detail: {
+            name: res.name,
+            description: res.description,
+            steps_json: JSON.stringify(res.steps),
+          },
+        }),
+      );
+      setMessages((m) => [...m, { role: "assistant", content: res.reply }]);
+    } catch (err) {
+      let reply = "Something went wrong building that workflow.";
+      if (err instanceof ApiError) {
+        if (err.status === 422)
+          reply = "I couldn't turn that into a workflow — try describing the steps more concretely.";
+        else if (err.status === 0) reply = "The daemon looks offline — start it and try again.";
+        else reply = err.message;
+      }
+      setMessages((m) => [...m, { role: "assistant", content: reply }]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Card title="Build with chat" icon={<Sparkles size={15} />}>
+      <p className="mb-3 text-xs text-zinc-500">
+        Describe a process and the agent builds the steps into the editor above — e.g.{" "}
+        <span className="text-zinc-400">“research a topic, draft a summary, then review it.”</span>
+      </p>
+
+      <div
+        ref={threadRef}
+        className="mb-3 max-h-72 space-y-3 overflow-y-auto rounded-xl border border-white/[0.05] bg-ink-950/40 p-3"
+      >
+        {messages.length === 0 && !busy ? (
+          <div className="space-y-2 py-2">
+            <div className="flex items-center gap-2 text-xs text-zinc-500">
+              <MessageSquare size={14} /> Try one of these:
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {EXAMPLES.map((ex) => (
+                <button
+                  key={ex}
+                  onClick={() => send(ex)}
+                  className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[11px] text-zinc-300 transition-colors hover:border-accent/40 hover:text-accent-soft"
+                >
+                  {ex}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          messages.map((m, i) => (
+            <div
+              key={i}
+              className={`flex gap-2.5 ${m.role === "user" ? "flex-row-reverse" : ""}`}
+            >
+              <span
+                className={`mt-0.5 grid h-6 w-6 shrink-0 place-items-center rounded-lg ${
+                  m.role === "user"
+                    ? "bg-accent/15 text-accent-soft"
+                    : "border border-white/10 bg-white/[0.03] text-zinc-400"
+                }`}
+              >
+                {m.role === "user" ? <User size={13} /> : <Bot size={13} />}
+              </span>
+              <div
+                className={`max-w-[80%] whitespace-pre-wrap rounded-xl px-3 py-2 text-[13px] leading-relaxed ${
+                  m.role === "user"
+                    ? "bg-accent/[0.1] text-zinc-100"
+                    : "bg-white/[0.03] text-zinc-300"
+                }`}
+              >
+                {m.content}
+              </div>
+            </div>
+          ))
+        )}
+        {busy && (
+          <div className="flex items-center gap-2 text-xs text-zinc-500">
+            <Loader2 size={13} className="animate-spin" /> Building the workflow…
+          </div>
+        )}
+      </div>
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          send(input);
+        }}
+        className="flex items-end gap-2"
+      >
+        <textarea
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              send(input);
+            }
+          }}
+          rows={2}
+          placeholder="Describe the workflow you want… (Enter to send, Shift+Enter for a new line)"
+          className="field flex-1 resize-y text-[13px]"
+          disabled={busy}
+        />
+        <button type="submit" disabled={busy || !input.trim()} className="btn-accent">
+          {busy ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+          Build
+        </button>
+      </form>
+    </Card>
   );
 }
 

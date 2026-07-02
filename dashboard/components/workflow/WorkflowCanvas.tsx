@@ -328,6 +328,24 @@ function Canvas() {
     refreshDefs();
   }, [refreshDefs]);
 
+  // Bridge: the "Build with chat" panel (workflows/page.tsx) dispatches this
+  // event with a generated {name, description, steps_json} workflow — load it
+  // into the canvas via the SAME path as the Load dropdown, then refresh the
+  // saved list (the workflow was persisted server-side by /workflows/generate).
+  useEffect(() => {
+    const onLoad = (e: Event) => {
+      const def = (e as CustomEvent).detail as WorkflowDef | undefined;
+      if (def && typeof def.steps_json === "string") {
+        loadDef(def);
+        refreshDefs();
+      }
+    };
+    window.addEventListener("ij:load-workflow", onLoad);
+    return () => window.removeEventListener("ij:load-workflow", onLoad);
+    // loadDef is stable (useCallback); refreshDefs too.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Close the Load dropdown on an outside click.
   useEffect(() => {
     if (!loadOpen) return;
