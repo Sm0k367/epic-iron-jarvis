@@ -254,8 +254,10 @@ export function TerminalPane({
           : "border-white/[0.07] hover:border-white/[0.14]"
       }`}
     >
-      {/* Pane header: shell · cwd · connection state · close */}
-      <header className="flex shrink-0 items-center gap-2 border-b border-white/[0.06] bg-ink-900/60 px-3 py-2">
+      {/* Pane header: shell · cwd · connection state · close. The `ij-term-drag`
+          class marks this as the drag handle for react-rnd on the Terminals
+          page (buttons/selects inside are excluded via react-rnd's `cancel`). */}
+      <header className="ij-term-drag flex shrink-0 cursor-move items-center gap-2 border-b border-white/[0.06] bg-ink-900/60 px-3 py-2">
         <TerminalIcon
           size={13}
           className={focused ? "text-accent" : "text-zinc-500"}

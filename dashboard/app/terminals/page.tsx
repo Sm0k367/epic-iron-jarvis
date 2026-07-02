@@ -1,19 +1,19 @@
 "use client";
 
-// Multi-terminal workspace: a tiled grid of live xterm.js terminals on the
-// left/center, and a directory tree on the right for picking a project folder
-// to open a terminal in. xterm is dynamically imported (no SSR).
+// Multi-terminal workspace: a FREE-FORM canvas of live xterm.js terminals on the
+// left/center (each pane is dragged by its header and resized from its edges,
+// like windows on a desktop), and a directory tree on the right for picking a
+// project folder to open a terminal in. xterm is dynamically imported (no SSR).
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import dynamic from "next/dynamic";
+import { Rnd } from "react-rnd";
 import {
+  LayoutGrid,
   Loader2,
+  PanelLeftOpen,
   Plus,
   SquareTerminal,
-  SlidersHorizontal,
-  Square,
-  Columns2,
-  PanelLeftOpen,
 } from "lucide-react";
 import { ApiError, del, get, post } from "@/lib/api";
 import type { ModelOption, Shell, TerminalInfo } from "@/lib/types";
@@ -35,6 +35,14 @@ const TerminalPane = dynamic(
   },
 );
 
+// A pane's position + size on the free-form canvas.
+type Rect = { x: number; y: number; width: number; height: number };
+
+// Cascading default so freshly opened panes stagger instead of stacking exactly.
+function cascadeRect(i: number): Rect {
+  return { x: 24 + (i % 5) * 34, y: 24 + (i % 5) * 34, width: 620, height: 380 };
+}
+
 export default function TerminalsPage() {
   const [terminals, setTerminals] = useState<TerminalInfo[]>([]);
   const [shells, setShells] = useState<Shell[]>([]);
@@ -51,19 +59,60 @@ export default function TerminalsPage() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  // Pane size is user-controlled + persisted. Changing it just resizes the
-  // container; each TerminalPane's ResizeObserver re-fits xterm and tells the
-  // shell (SIGWINCH) automatically, so no server change is needed.
-  const [paneHeight, setPaneHeight] = useState(400);
-  const [cols, setCols] = useState(2);
   const [treeCollapsed, setTreeCollapsed] = useState(false);
+
+  // Per-terminal free-form layout (position + size), persisted to localStorage.
+  const [layout, setLayout] = useState<Record<string, Rect>>({});
+  // Stacking order — focusing/dragging a pane bumps it to the top. zTop is a
+  // monotonic counter handed out as the next-highest z-index.
+  const [zOrder, setZOrder] = useState<Record<string, number>>({});
+  const zTop = useRef(1);
+  const hydrated = useRef(false); // don't clobber stored layout before we read it
+  const canvasRef = useRef<HTMLDivElement | null>(null);
+
+  // Seed persisted UI state on mount (client-only — no localStorage during SSR).
   useEffect(() => {
-    const h = Number(localStorage.getItem("ij_term_height"));
-    if (h >= 220 && h <= 1200) setPaneHeight(h);
-    const c = Number(localStorage.getItem("ij_term_cols"));
-    if (c === 1 || c === 2) setCols(c);
     setTreeCollapsed(localStorage.getItem("ij_term_tree_collapsed") === "1");
+    try {
+      const raw = localStorage.getItem("ij_term_layout");
+      if (raw) {
+        const parsed = JSON.parse(raw) as unknown;
+        if (parsed && typeof parsed === "object") {
+          setLayout(parsed as Record<string, Rect>);
+        }
+      }
+    } catch {
+      /* bad JSON / private mode — start clean */
+    }
+    hydrated.current = true;
   }, []);
+
+  // Persist the whole layout map whenever it changes (after hydration).
+  useEffect(() => {
+    if (!hydrated.current) return;
+    try {
+      localStorage.setItem("ij_term_layout", JSON.stringify(layout));
+    } catch {
+      /* private mode */
+    }
+  }, [layout]);
+
+  // Ensure every live terminal has a rect — fill missing ids with a cascading
+  // default (never mutate during render; do it in an effect keyed on terminals).
+  useEffect(() => {
+    setLayout((prev) => {
+      let changed = false;
+      const next = { ...prev };
+      terminals.forEach((t, i) => {
+        if (!next[t.id]) {
+          next[t.id] = cascadeRect(i);
+          changed = true;
+        }
+      });
+      return changed ? next : prev;
+    });
+  }, [terminals]);
+
   function changeTreeCollapsed(v: boolean) {
     setTreeCollapsed(v);
     try {
@@ -72,21 +121,51 @@ export default function TerminalsPage() {
       /* private mode */
     }
   }
-  function changeHeight(h: number) {
-    setPaneHeight(h);
-    try {
-      localStorage.setItem("ij_term_height", String(h));
-    } catch {
-      /* private mode */
-    }
-  }
-  function changeCols(c: number) {
-    setCols(c);
-    try {
-      localStorage.setItem("ij_term_cols", String(c));
-    } catch {
-      /* private mode */
-    }
+
+  // Focus + raise a pane to the front of the stack.
+  const bringToFront = useCallback((id: string) => {
+    setFocusedId(id);
+    zTop.current += 1;
+    const z = zTop.current;
+    setZOrder((prev) => ({ ...prev, [id]: z }));
+  }, []);
+
+  // Merge a position/size patch into a pane's rect (drag = x/y, resize = all).
+  const setRect = useCallback((id: string, patch: Partial<Rect>) => {
+    setLayout((prev) => ({
+      ...prev,
+      [id]: { ...(prev[id] ?? cascadeRect(0)), ...patch },
+    }));
+  }, []);
+
+  // The rect to render a pane at — persisted layout, else a cascading default.
+  const rectFor = (t: TerminalInfo, i: number): Rect => layout[t.id] ?? cascadeRect(i);
+
+  // Re-tile every pane into a neat 2-column grid that fits the canvas — the
+  // escape hatch when the free-form layout gets messy.
+  function tidy() {
+    if (terminals.length === 0) return;
+    const canvas = canvasRef.current;
+    const cols = 2;
+    const gap = 16;
+    const pad = 16;
+    const w = canvas?.clientWidth ?? 1200;
+    const h = canvas?.clientHeight ?? 640;
+    const rows = Math.ceil(terminals.length / cols) || 1;
+    const cellW = Math.floor((w - pad * 2 - gap * (cols - 1)) / cols);
+    const cellH = Math.floor((h - pad * 2 - gap * (rows - 1)) / rows);
+    const next: Record<string, Rect> = {};
+    terminals.forEach((t, i) => {
+      const c = i % cols;
+      const r = Math.floor(i / cols);
+      next[t.id] = {
+        x: pad + c * (cellW + gap),
+        y: pad + r * (cellH + gap),
+        width: Math.max(280, cellW),
+        height: Math.max(200, cellH),
+      };
+    });
+    setLayout(next);
   }
 
   // Re-attach to existing sessions + load the shell list on mount.
@@ -130,6 +209,15 @@ export default function TerminalsPage() {
           shell: shell || undefined,
         });
         setTerminals((prev) => [...prev, info]);
+        // Give the new pane a fresh cascade rect so it doesn't land exactly on
+        // the last one, and raise it to the front.
+        setLayout((prev) => ({
+          ...prev,
+          [info.id]: cascadeRect(Object.keys(prev).length),
+        }));
+        zTop.current += 1;
+        const z = zTop.current;
+        setZOrder((prev) => ({ ...prev, [info.id]: z }));
         setFocusedId(info.id);
         setOffline(false);
       } catch (e) {
@@ -156,46 +244,20 @@ export default function TerminalsPage() {
       <Reveal>
         <PageHeader
           title="Terminals"
-          subtitle="Live shell sessions, tiled. Pick a project folder on the right and open a terminal there, or hit + to add one."
+          subtitle="Live shell sessions on a free-form canvas — drag a pane by its header to move it, drag its edges to resize. Pick a project folder on the right and open a terminal there, or hit + to add one."
           actions={
             <div className="flex flex-wrap items-center gap-2">
-              {/* Terminal size: drag to make the panes taller/shorter. */}
-              <label
-                className="flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400"
-                title="Terminal height"
+              {/* Tidy — re-tile every pane into a neat grid when it gets messy. */}
+              <button
+                type="button"
+                onClick={tidy}
+                disabled={terminals.length === 0}
+                title="Tidy — re-tile all terminals into a neat grid"
+                className="btn-ghost flex items-center gap-1.5 py-1.5 text-[13px] disabled:cursor-not-allowed disabled:opacity-50"
               >
-                <SlidersHorizontal size={13} className="text-accent-soft/70" />
-                Size
-              </label>
-              <input
-                type="range"
-                min={220}
-                max={900}
-                step={20}
-                value={paneHeight}
-                onChange={(e) => changeHeight(Number(e.target.value))}
-                aria-label="Terminal height"
-                title={`${paneHeight}px tall`}
-                className="w-28 accent-cyan-400"
-              />
-              {/* Columns: 1 = big single pane, 2 = side-by-side. */}
-              <div className="flex overflow-hidden rounded-lg border border-white/10">
-                {[1, 2].map((c) => (
-                  <button
-                    key={c}
-                    type="button"
-                    onClick={() => changeCols(c)}
-                    title={`${c} column${c > 1 ? "s" : ""}`}
-                    className={`px-2.5 py-1.5 text-[12px] font-medium transition-colors ${
-                      cols === c
-                        ? "bg-accent/15 text-accent-soft"
-                        : "text-zinc-400 hover:bg-white/[0.05]"
-                    }`}
-                  >
-                    {c === 1 ? <Square size={13} /> : <Columns2 size={13} />}
-                  </button>
-                ))}
-              </div>
+                <LayoutGrid size={14} className="text-accent-soft/80" />
+                Tidy
+              </button>
               <span className="mx-1 h-5 w-px bg-white/10" />
               <label className="flex items-center gap-2 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                 <SquareTerminal size={13} className="text-accent-soft/70" />
@@ -245,7 +307,7 @@ export default function TerminalsPage() {
 
       <Reveal>
         <div className="flex flex-col gap-5 lg:flex-row">
-          {/* Terminals workspace (left / center) */}
+          {/* Terminals workspace (left / center) — free-form canvas. */}
           <div className="min-w-0 flex-1">
             {loading ? (
               <Card>
@@ -253,77 +315,83 @@ export default function TerminalsPage() {
               </Card>
             ) : (
               <div
-                className="grid gap-4"
-                style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+                ref={canvasRef}
+                className="relative w-full overflow-hidden rounded-2xl border border-white/[0.05] bg-black/20"
+                style={{ height: "calc(100vh - 12rem)", minHeight: 480 }}
               >
-                {terminals.map((t) => (
-                  <div key={t.id} className="relative rounded-2xl" style={{ height: paneHeight }}>
-                    <TerminalPane
-                      info={t}
-                      focused={focusedId === t.id}
-                      onFocus={() => setFocusedId(t.id)}
-                      onClose={() => setPendingClose(t.id)}
-                      models={models}
-                    />
-                    {pendingClose === t.id && (
-                      <div className="absolute inset-0 z-20 grid place-items-center rounded-2xl bg-black/70 backdrop-blur-sm">
-                        <div className="w-[min(20rem,90%)] rounded-2xl border border-white/10 bg-ink-850/95 p-5 text-center shadow-card">
-                          <div className="text-sm font-semibold text-zinc-100">
-                            Close this terminal?
-                          </div>
-                          <p className="mt-1 break-all text-[12px] text-zinc-500">
-                            Ends the live shell session in {t.cwd}.
-                          </p>
-                          <div className="mt-4 flex items-center justify-center gap-2">
-                            <ConfirmButton
-                              onConfirm={() => {
-                                closeTerminal(t.id);
-                                setPendingClose(null);
-                              }}
-                              label="Close terminal"
-                              confirmLabel="Confirm close"
-                              title="End this shell session"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => setPendingClose(null)}
-                              className="btn-ghost py-1 text-xs"
-                            >
-                              Cancel
-                            </button>
-                          </div>
+                {terminals.length === 0 ? (
+                  <div className="grid h-full place-items-center text-sm text-zinc-500">
+                    No terminals yet — hit New terminal.
+                  </div>
+                ) : (
+                  terminals.map((t, i) => {
+                    const r = rectFor(t, i);
+                    return (
+                      <Rnd
+                        key={t.id}
+                        size={{ width: r.width, height: r.height }}
+                        position={{ x: r.x, y: r.y }}
+                        bounds="parent"
+                        minWidth={280}
+                        minHeight={200}
+                        dragHandleClassName="ij-term-drag"
+                        cancel="button, select, input, textarea, .xterm, .xterm-viewport, .xterm-screen"
+                        style={{ zIndex: zOrder[t.id] ?? 1 }}
+                        onMouseDown={() => bringToFront(t.id)}
+                        onDragStart={() => bringToFront(t.id)}
+                        onDragStop={(_e, d) => setRect(t.id, { x: d.x, y: d.y })}
+                        onResizeStop={(_e, _dir, ref, _delta, pos) =>
+                          setRect(t.id, {
+                            width: ref.offsetWidth,
+                            height: ref.offsetHeight,
+                            x: pos.x,
+                            y: pos.y,
+                          })
+                        }
+                      >
+                        <div className="relative h-full w-full">
+                          <TerminalPane
+                            info={t}
+                            focused={focusedId === t.id}
+                            onFocus={() => bringToFront(t.id)}
+                            onClose={() => setPendingClose(t.id)}
+                            models={models}
+                          />
+                          {pendingClose === t.id && (
+                            <div className="absolute inset-0 z-20 grid place-items-center rounded-2xl bg-black/70 backdrop-blur-sm">
+                              <div className="w-[min(20rem,90%)] rounded-2xl border border-white/10 bg-ink-850/95 p-5 text-center shadow-card">
+                                <div className="text-sm font-semibold text-zinc-100">
+                                  Close this terminal?
+                                </div>
+                                <p className="mt-1 break-all text-[12px] text-zinc-500">
+                                  Ends the live shell session in {t.cwd}.
+                                </p>
+                                <div className="mt-4 flex items-center justify-center gap-2">
+                                  <ConfirmButton
+                                    onConfirm={() => {
+                                      closeTerminal(t.id);
+                                      setPendingClose(null);
+                                    }}
+                                    label="Close terminal"
+                                    confirmLabel="Confirm close"
+                                    title="End this shell session"
+                                  />
+                                  <button
+                                    type="button"
+                                    onClick={() => setPendingClose(null)}
+                                    className="btn-ghost py-1 text-xs"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
                         </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-
-                {/* The prominent "+" tile to add a new terminal. */}
-                <button
-                  data-add-terminal
-                  onClick={() => addTerminal(selectedPath)}
-                  disabled={busy}
-                  style={{ height: paneHeight }}
-                  className="group grid place-items-center rounded-2xl border-2 border-dashed border-white/[0.1] bg-white/[0.01] text-zinc-500 transition-colors hover:border-accent/40 hover:bg-accent/[0.04] hover:text-accent-soft disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  <div className="flex flex-col items-center gap-3">
-                    <span className="grid h-14 w-14 place-items-center rounded-2xl border border-white/10 bg-white/[0.03] transition-colors group-hover:border-accent/40 group-hover:bg-accent/10">
-                      {busy ? (
-                        <Loader2 size={26} className="animate-spin" />
-                      ) : (
-                        <Plus size={26} />
-                      )}
-                    </span>
-                    <div className="text-center">
-                      <div className="text-sm font-medium">Add terminal</div>
-                      <div className="mt-0.5 max-w-[16rem] text-[11px] text-zinc-400">
-                        {selectedPath
-                          ? `opens in ${selectedPath}`
-                          : "opens in your home directory"}
-                      </div>
-                    </div>
-                  </div>
-                </button>
+                      </Rnd>
+                    );
+                  })
+                )}
               </div>
             )}
           </div>
