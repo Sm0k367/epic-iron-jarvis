@@ -1627,6 +1627,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
             await close_exited()
             return
 
+        # PERSISTENCE: replay the session's scrollback so a RE-ATTACHING pane
+        # (the user switched tabs / navigated away and back) shows its history
+        # instead of a blank screen. The shell itself never died — only the
+        # browser's xterm buffer was lost — so we resend what it printed.
+        history = session.scrollback_bytes()
+        if history:
+            try:
+                await ws.send_bytes(history)
+            except Exception:  # a client that drops mid-replay just reconnects
+                pass
+
         async def pump_output() -> None:  # PTY -> client
             # 10ms idle poll: measured end-to-end, the shell's own echo is
             # ~50ms (ConPTY/PowerShell), so our added worst-case latency should

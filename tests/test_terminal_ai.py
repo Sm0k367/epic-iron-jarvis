@@ -115,3 +115,47 @@ def test_dead_pty_write_never_raises():
     b = WinPtyBackend()
     b._proc = DeadProc()
     b.write("ls\n")  # must not raise
+
+
+# --- persistence: scrollback replayed on re-attach (tab switch) ----------------
+
+
+def test_terminal_scrollback_replayed_on_reattach(tmp_path, monkeypatch):
+    """Navigating away and back must NOT start fresh: the server session stays
+    alive and its scrollback is replayed so the pane shows its history."""
+    client = _fake_terminal_app(tmp_path, monkeypatch)
+    tid = client.post("/terminals", json={}).json()["id"]
+
+    # First attach: produce some output (FakeBackend echoes completed lines).
+    with client.websocket_connect(f"/terminals/{tid}/ws") as ws:
+        ws.send_text("hello-world\n")
+        got = b""
+        for _ in range(20):
+            got += ws.receive_bytes()
+            if b"hello-world" in got:
+                break
+        assert b"hello-world" in got
+
+    # The shell is STILL alive server-side after the disconnect.
+    alive = {t["id"]: t for t in client.get("/terminals").json()["terminals"]}
+    assert alive[tid]["alive"] is True
+
+    # Re-attach: the FIRST bytes are the replayed scrollback (history), not blank.
+    with client.websocket_connect(f"/terminals/{tid}/ws") as ws2:
+        replay = ws2.receive_bytes()
+        assert b"hello-world" in replay
+
+    client.delete(f"/terminals/{tid}")
+
+
+def test_session_scrollback_accumulates_and_survives_reads(tmp_path, monkeypatch):
+    from iron_jarvis.terminals.backend import FakeBackend
+    from iron_jarvis.terminals.session import TerminalSession
+
+    s = TerminalSession(shell="fake", argv=["fake"], backend=FakeBackend()).start()
+    s.write("line-one\n")
+    s.read()  # pump-equivalent: drains backend into the scrollback
+    s.write("line-two\n")
+    s.read()
+    sb = s.scrollback_bytes()
+    assert b"line-one" in sb and b"line-two" in sb  # full history retained

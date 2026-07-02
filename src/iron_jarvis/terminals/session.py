@@ -10,8 +10,10 @@ from ..core.ids import new_id, utcnow
 from .backend import PtyBackend, default_backend
 from .shells import resolve_shell
 
-#: How much recent output a session retains for the per-terminal AI assist.
-TAIL_MAX_BYTES = 16 * 1024
+#: How much recent output a session retains — doubles as the scrollback replayed
+#: to a RE-ATTACHING pane (tab switch / navigation) so it shows its history
+#: instead of a blank screen, and as the context for the per-terminal AI assist.
+TAIL_MAX_BYTES = 256 * 1024
 
 #: ANSI escape sequences (CSI + OSC) — stripped from the AI-facing tail so the
 #: model reads clean text instead of color/cursor noise.
@@ -77,9 +79,17 @@ class TerminalSession:
         return data
 
     def output_tail(self) -> str:
-        """Recent output as CLEAN text (ANSI stripped) for the AI assist."""
-        text = bytes(self._tail).decode("utf-8", "replace")
+        """Recent output as CLEAN text (ANSI stripped) for the AI assist.
+
+        Only the last ~32KB is decoded — the AI needs a short window, and the
+        full scrollback can be up to :data:`TAIL_MAX_BYTES`."""
+        text = bytes(self._tail[-32 * 1024:]).decode("utf-8", "replace")
         return _ANSI_RE.sub("", text)
+
+    def scrollback_bytes(self) -> bytes:
+        """The raw recent output (with ANSI intact) to REPLAY into a re-attaching
+        pane so it renders its history instead of a blank screen."""
+        return bytes(self._tail)
 
     def resize(self, cols: int, rows: int) -> None:
         self.cols = cols
