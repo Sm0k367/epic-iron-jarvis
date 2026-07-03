@@ -21,12 +21,37 @@ import WorkflowCanvas from "@/components/workflow/WorkflowCanvas";
 import { timeAgo } from "@/lib/format";
 
 export default function WorkflowsPage() {
+  // Handoff from a terminal pane's "→ Workflow" button: it stashes the generated
+  // workflow in sessionStorage and navigates here; load it into the canvas once
+  // WorkflowCanvas has mounted its `ij:load-workflow` listener.
+  useEffect(() => {
+    let raw: string | null = null;
+    try {
+      raw = sessionStorage.getItem("ij_pending_workflow");
+      if (raw) sessionStorage.removeItem("ij_pending_workflow");
+    } catch {
+      return;
+    }
+    if (!raw) return;
+    let def: unknown;
+    try {
+      def = JSON.parse(raw);
+    } catch {
+      return;
+    }
+    const t = setTimeout(() => {
+      window.dispatchEvent(new CustomEvent("ij:load-workflow", { detail: def }));
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }, 80);
+    return () => clearTimeout(t);
+  }, []);
+
   return (
     <PageShell>
       <Reveal>
         <PageHeader
           title="Workflows"
-          subtitle="Wire agents into a visual, multi-step workflow, then run it — or describe one below and let the agent build it."
+          subtitle="Wire agents into a visual, multi-step workflow, then run it — describe one below, or send a terminal session here with its → Workflow button."
         />
       </Reveal>
       <Reveal>

@@ -5,6 +5,7 @@
 // effect so it never runs during SSR / `next build`.
 
 import { useEffect, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
 import "@xterm/xterm/css/xterm.css";
 import {
   CornerDownLeft,
@@ -14,6 +15,7 @@ import {
   PlugZap,
   Sparkles,
   Terminal as TerminalIcon,
+  Workflow,
   X,
 } from "lucide-react";
 import { ApiError, post, wsUrl } from "@/lib/api";
@@ -62,6 +64,7 @@ export function TerminalPane({
   /** Model catalog for the PER-PANE AI assist picker (from /models). */
   models?: ModelOption[];
 }) {
+  const router = useRouter();
   const holderRef = useRef<HTMLDivElement | null>(null);
   const [state, setState] = useState<ConnState>("connecting");
   // The live WS, exposed to the AI bar so "Run" can type into THIS shell.
@@ -93,6 +96,35 @@ export function TerminalPane({
       setAiError(err instanceof ApiError ? err.message : String(err));
     } finally {
       setAiBusy(false);
+    }
+  }
+
+  // Turn THIS session's transcript into a repeatable workflow: the agent builds
+  // it server-side, we stash it, then hop to the Workflows editor which loads it.
+  const [wfBusy, setWfBusy] = useState(false);
+  async function makeWorkflow(e: React.MouseEvent) {
+    e.stopPropagation();
+    if (wfBusy) return;
+    setWfBusy(true);
+    setAiError(null);
+    try {
+      const [provider, model] = choice ? choice.split("::") : ["", ""];
+      const def = await post<{ name: string; description: string; steps: unknown[] }>(
+        `/terminals/${info.id}/workflow`,
+        { provider, model },
+      );
+      try {
+        sessionStorage.setItem("ij_pending_workflow", JSON.stringify(def));
+      } catch {
+        /* private mode — the editor just won't auto-load */
+      }
+      router.push("/workflows");
+    } catch (err) {
+      // Surface the reason in the assist bar (e.g. "no output yet").
+      setAiError(err instanceof ApiError ? err.message : String(err));
+      setAiOpen(true);
+    } finally {
+      setWfBusy(false);
     }
   }
 
@@ -299,6 +331,14 @@ export function TerminalPane({
           }`}
         >
           <Sparkles size={13} />
+        </button>
+        <button
+          onClick={makeWorkflow}
+          disabled={wfBusy}
+          title="Turn this session into a repeatable workflow"
+          className="grid h-5 w-5 shrink-0 place-items-center rounded-md text-zinc-500 transition-colors hover:bg-accent/15 hover:text-accent-soft disabled:opacity-50"
+        >
+          {wfBusy ? <Loader2 size={13} className="animate-spin" /> : <Workflow size={13} />}
         </button>
         {info.degraded && (
           <span

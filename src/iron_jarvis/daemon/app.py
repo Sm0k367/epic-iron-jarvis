@@ -241,6 +241,14 @@ class WorkflowGenerateBody(BaseModel):
     model: str = ""
 
 
+class TerminalWorkflowBody(BaseModel):
+    """Turn a terminal session's transcript into a repeatable workflow."""
+
+    note: str = ""  # optional hint: "what this session was doing"
+    provider: str = ""
+    model: str = ""
+
+
 class FeedbackBody(BaseModel):
     rating: str = "up"  # up | down | neutral
     comment: str = ""
@@ -1777,6 +1785,39 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "model": model,
         }
 
+    @app.post("/terminals/{term_id}/workflow")
+    async def terminal_to_workflow(
+        term_id: str, body: TerminalWorkflowBody
+    ) -> dict[str, Any]:
+        """Turn THIS terminal session into a repeatable workflow.
+
+        Feeds the session's (ANSI-stripped) transcript to the same agent that
+        powers the workflow builder, asking it to extract the meaningful commands
+        into an ordered ``{name, steps}`` workflow. Saves + returns it so the
+        dashboard can open it in the editor. Read-only w.r.t. the shell.
+        """
+        session = platform.terminals.get(term_id)
+        if session is None:
+            raise HTTPException(status_code=404, detail="no such terminal")
+        tail = session.output_tail()[-8000:]
+        if not tail.strip():
+            raise HTTPException(
+                status_code=400, detail="this terminal has no output to turn into a workflow yet"
+            )
+        note = (body.note or "").strip()
+        description = (
+            "Below is a transcript of a terminal session — the shell prompts, the "
+            "commands that were run, and their output. Turn the MEANINGFUL commands "
+            "into a repeatable workflow so this whole process can be run again from "
+            "scratch. Ignore typos, failed/exploratory commands, and interactive "
+            "noise; keep the steps concrete, in order, and parameterize obvious "
+            "specifics (paths, names) in the task text where sensible.\n\n"
+        )
+        if note:
+            description += f"What this session was doing: {note}\n\n"
+        description += f"Terminal transcript:\n```\n{tail}\n```"
+        return await _build_workflow(description, body.provider, body.model)
+
     # --- Filesystem tree (directory browser for the terminals panel) ------
 
     @app.get("/fs/drives")
@@ -1855,21 +1896,22 @@ def create_app(project_root: str | None = None) -> FastAPI:
             raise HTTPException(status_code=404, detail="no such workflow")
         return rec.model_dump()
 
-    @app.post("/workflows/generate")
-    async def generate_workflow(body: WorkflowGenerateBody) -> dict[str, Any]:
-        """Build (or refine) a workflow from a natural-language description.
-
-        An agent turns the request into a ``{name, description, steps}`` workflow
-        (steps = ``{name, agent, task, tool?}``), saves it, and returns it so the
-        editor can load it. Refinement: pass ``current`` (the steps in the
-        editor) and the new instruction.
-        """
+    async def _build_workflow(
+        description: str,
+        provider: str = "",
+        model: str = "",
+        name: str = "",
+        current: list[dict] | None = None,
+    ) -> dict[str, Any]:
+        """Turn a natural-language ``description`` into a saved ``{name, steps}``
+        workflow via an agent. Shared by the chat builder and the
+        terminal-session → workflow bridge."""
         import json as _json
 
         from ..providers.adapters.base import LLMMessage
 
-        provider = body.provider or platform.config.default_provider
-        model = body.model or platform.config.default_model
+        provider = provider or platform.config.default_provider
+        model = model or platform.config.default_model
         try:
             adapter = platform.providers.get(provider, model)
         except Exception as exc:  # noqa: BLE001
@@ -1885,11 +1927,11 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "agent MUST be one of: builder, planner, researcher, reviewer, "
             "supervisor. Keep tasks concrete and self-contained. Prefer 2-6 steps."
         )
-        user = f"Create a workflow for this request:\n\n{body.description}"
-        if body.current:
+        user = f"Create a workflow for this request:\n\n{description}"
+        if current:
             user += (
                 "\n\nRefine THIS existing workflow (return the full updated "
-                f"workflow):\n{_json.dumps(body.current)}"
+                f"workflow):\n{_json.dumps(current)}"
             )
         try:
             resp = await adapter.complete(
@@ -1937,19 +1979,35 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         import re as _re
 
-        name = body.name or wf.get("name") or "generated-workflow"
-        name = _re.sub(r"[^a-zA-Z0-9_-]+", "-", str(name).strip().lower()).strip("-") or "workflow"
-        description = str(wf.get("description") or body.description)[:200]
+        wf_name = name or wf.get("name") or "generated-workflow"
+        wf_name = (
+            _re.sub(r"[^a-zA-Z0-9_-]+", "-", str(wf_name).strip().lower()).strip("-")
+            or "workflow"
+        )
+        wf_desc = str(wf.get("description") or description)[:200]
 
         from ..workflows.store import WorkflowStore
 
-        WorkflowStore(platform.engine).save(name, steps, description=description)
+        WorkflowStore(platform.engine).save(wf_name, steps, description=wf_desc)
         return {
-            "name": name,
-            "description": description,
+            "name": wf_name,
+            "description": wf_desc,
             "steps": steps,
-            "reply": f"Built **{name}** with {len(steps)} step(s). Loaded into the editor — tweak and Run when ready.",
+            "reply": f"Built **{wf_name}** with {len(steps)} step(s). Loaded into the editor — tweak and Run when ready.",
         }
+
+    @app.post("/workflows/generate")
+    async def generate_workflow(body: WorkflowGenerateBody) -> dict[str, Any]:
+        """Build (or refine) a workflow from a natural-language description.
+
+        An agent turns the request into a ``{name, description, steps}`` workflow
+        (steps = ``{name, agent, task, tool?}``), saves it, and returns it so the
+        editor can load it. Refinement: pass ``current`` (the steps in the
+        editor) and the new instruction.
+        """
+        return await _build_workflow(
+            body.description, body.provider, body.model, body.name, body.current
+        )
 
     # Saved prompts / task templates (one-click re-run of a frequent task).
     @app.get("/templates")
