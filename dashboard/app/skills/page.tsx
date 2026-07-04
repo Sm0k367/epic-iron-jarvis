@@ -1,10 +1,42 @@
 "use client";
 
-import { useState } from "react";
-import { Sparkles, BookOpen, Plus, Save, RefreshCw } from "lucide-react";
+import { useRef, useState } from "react";
+import { Sparkles, BookOpen, Plus, Save, RefreshCw, Play, Copy, Check, Cpu } from "lucide-react";
 import { useApi } from "@/lib/useApi";
 import { post, ApiError } from "@/lib/api";
 import type { Skill, SkillDetail } from "@/lib/types";
+
+/** Response of POST /skills/{name}/apply — a one-shot "use it right now" run. */
+interface SkillApplyResult {
+  reply: string;
+  skill: string;
+  provider: string;
+  model: string;
+}
+
+/** Small copy-to-clipboard button with a transient "Copied" state. */
+function CopyButton({ text }: { text: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 1500);
+    } catch {
+      /* clipboard unavailable (permissions / insecure context) — quiet no-op */
+    }
+  }
+  return (
+    <button
+      type="button"
+      onClick={() => void copy()}
+      title="Copy the reply"
+      className="inline-flex shrink-0 items-center gap-1 rounded-lg border border-white/10 px-2 py-1 text-[11px] font-medium text-zinc-400 transition-colors hover:border-accent/40 hover:text-accent-soft"
+    >
+      {copied ? <Check size={12} /> : <Copy size={12} />} {copied ? "Copied" : "Copy"}
+    </button>
+  );
+}
 
 // Where a skill came from — a small colored badge so Claude/Codex skills are
 // visually distinct from Iron Jarvis's own.
@@ -46,6 +78,48 @@ export default function SkillsPage() {
   }>("/skills");
   const [selected, setSelected] = useState<string | null>(null);
   const detail = useApi<SkillDetail>(selected ? `/skills/${selected}` : null, [selected]);
+
+  // --- "Use this skill" bubble state -----------------------------------------
+  // Cleared whenever a different skill is selected; the ref lets an in-flight
+  // run detect that the user switched away so a stale reply never leaks in.
+  const [applyReq, setApplyReq] = useState("");
+  const [applyBusy, setApplyBusy] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  const [applyResult, setApplyResult] = useState<SkillApplyResult | null>(null);
+  const selectedRef = useRef<string | null>(null);
+
+  function selectSkill(name: string) {
+    if (name !== selected) {
+      setApplyReq("");
+      setApplyError(null);
+      setApplyResult(null);
+    }
+    selectedRef.current = name;
+    setSelected(name);
+  }
+
+  async function runSkill(e: React.FormEvent) {
+    e.preventDefault();
+    const target = selected;
+    const request = applyReq.trim();
+    if (!target || !request || applyBusy) return;
+    setApplyBusy(true);
+    setApplyError(null);
+    setApplyResult(null);
+    try {
+      const res = await post<SkillApplyResult>(
+        `/skills/${encodeURIComponent(target)}/apply`,
+        { request },
+      );
+      if (selectedRef.current !== target) return; // switched skills mid-run
+      setApplyResult(res);
+    } catch (err) {
+      if (selectedRef.current !== target) return;
+      setApplyError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setApplyBusy(false);
+    }
+  }
 
   // Filter by source (All / Claude / Codex / …) + a re-scan action so newly
   // added external skills show up without restarting the daemon.
@@ -278,7 +352,7 @@ export default function SkillsPage() {
                   {skills.map((s) => (
                     <li key={s.name}>
                       <button
-                        onClick={() => setSelected(s.name)}
+                        onClick={() => selectSkill(s.name)}
                         className={`w-full rounded-xl border px-3 py-2.5 text-left text-sm transition-colors ${
                           selected === s.name
                             ? "border-accent/30 bg-accent/[0.08] text-accent-soft"
@@ -310,6 +384,64 @@ export default function SkillsPage() {
                   <pre className="max-h-[60vh] overflow-auto whitespace-pre-wrap rounded-xl border border-white/[0.06] bg-ink-950 p-4 text-xs leading-relaxed text-zinc-300">
                     {detail.data.instructions}
                   </pre>
+
+                  {/* "Use this skill" bubble — run it on a request right here */}
+                  <div className="rounded-2xl border border-white/[0.07] bg-white/[0.02] p-3.5">
+                    <div className="mb-2.5 text-[11px] font-medium uppercase tracking-[0.12em] text-zinc-400">
+                      Use this skill
+                    </div>
+                    <form onSubmit={runSkill} className="space-y-2.5">
+                      <textarea
+                        value={applyReq}
+                        onChange={(e) => setApplyReq(e.target.value)}
+                        rows={3}
+                        placeholder="Ask for something using this skill — e.g. 'draft the storyboard for a 30s ad'"
+                        aria-label="What do you want this skill to do?"
+                        className="field resize-y text-sm"
+                      />
+                      <div className="flex flex-wrap items-center gap-3">
+                        <button
+                          type="submit"
+                          disabled={applyBusy || !applyReq.trim()}
+                          className="btn-accent py-1.5 text-xs"
+                        >
+                          {applyBusy ? (
+                            <LoaderInline label="Running…" />
+                          ) : (
+                            <>
+                              <Play size={14} /> Run
+                            </>
+                          )}
+                        </button>
+                        <span className="text-[11px] text-zinc-600">
+                          {applyBusy
+                            ? "Following the skill's instructions — usually 5–30 seconds."
+                            : "Answers right here, following the skill's instructions."}
+                        </span>
+                      </div>
+                    </form>
+                    {applyError && (
+                      <div className="mt-2.5">
+                        <ErrorNote>{applyError}</ErrorNote>
+                      </div>
+                    )}
+                    {applyResult && (
+                      <div className="mt-3 overflow-hidden rounded-xl border border-accent/20 bg-accent/[0.04]">
+                        <div className="flex items-center justify-between gap-2 border-b border-white/[0.06] px-3.5 py-2">
+                          <span className="inline-flex min-w-0 items-center gap-1.5 font-mono text-[11px] text-zinc-500">
+                            <Cpu size={11} className="shrink-0" />
+                            <span className="truncate">
+                              {applyResult.provider} · {applyResult.model}
+                            </span>
+                          </span>
+                          <CopyButton text={applyResult.reply} />
+                        </div>
+                        <div className="max-h-[45vh] overflow-auto whitespace-pre-wrap px-3.5 py-3 text-sm leading-relaxed text-zinc-200">
+                          {applyResult.reply}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <Empty>Could not load skill.</Empty>

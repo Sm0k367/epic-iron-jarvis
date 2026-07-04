@@ -212,6 +212,9 @@ function ParamChips({ params }: { params: ToolParam[] }) {
 interface SuiteTool {
   name: string;
   description: string;
+  /** Plain-language "what it does for you" line shown in the gallery (UI only —
+   *  `description` is what actually gets registered with the daemon). */
+  blurb: string;
   parameters: ToolParam[];
   command: string[];
   timeout_seconds: number;
@@ -232,6 +235,7 @@ const TOOL_SUITE: SuiteTool[] = [
   {
     name: "http_get",
     description: "Fetch a URL and print the response.",
+    blurb: "Grab the contents of any web page or API link.",
     parameters: [strParam("url", "The URL to fetch.")],
     command: ["curl", "-s", "{url}"],
     timeout_seconds: 30,
@@ -240,6 +244,7 @@ const TOOL_SUITE: SuiteTool[] = [
   {
     name: "ping_host",
     description: "Ping a host 4 times.",
+    blurb: "Check whether a website or machine is up and reachable.",
     parameters: [strParam("host", "Hostname or IP address to ping.")],
     command: ["ping", "-n", "4", "{host}"],
     timeout_seconds: 30,
@@ -248,6 +253,7 @@ const TOOL_SUITE: SuiteTool[] = [
   {
     name: "dns_lookup",
     description: "DNS lookup for a hostname.",
+    blurb: "Find the internet address behind a website name.",
     parameters: [strParam("host", "Hostname to resolve.")],
     command: ["nslookup", "{host}"],
     timeout_seconds: 20,
@@ -256,6 +262,7 @@ const TOOL_SUITE: SuiteTool[] = [
   {
     name: "list_dir",
     description: "List a directory.",
+    blurb: "See what's inside any folder on your computer.",
     parameters: [strParam("path", "Directory path to list.")],
     command: ["powershell", "-NoProfile", "-Command", "Get-ChildItem -Force '{path}'"],
     timeout_seconds: 20,
@@ -264,6 +271,7 @@ const TOOL_SUITE: SuiteTool[] = [
   {
     name: "word_count",
     description: "Count words in a text file.",
+    blurb: "Count how many words are in a document.",
     parameters: [strParam("file", "Path to the text file.")],
     command: [
       "powershell",
@@ -277,6 +285,7 @@ const TOOL_SUITE: SuiteTool[] = [
   {
     name: "disk_free",
     description: "Show free disk space.",
+    blurb: "Check how much storage space you have left.",
     parameters: [],
     command: [
       "powershell",
@@ -290,6 +299,7 @@ const TOOL_SUITE: SuiteTool[] = [
   {
     name: "git_status",
     description: "git status of a repo.",
+    blurb: "See what's changed in a code project since the last save point.",
     parameters: [strParam("repo", "Path to the git repository.")],
     command: ["git", "-C", "{repo}", "status", "--short"],
     timeout_seconds: 30,
@@ -298,6 +308,7 @@ const TOOL_SUITE: SuiteTool[] = [
   {
     name: "zip_folder",
     description: "Zip a folder.",
+    blurb: "Bundle a folder into a single .zip file, ready to share.",
     parameters: [
       strParam("source", "Folder (or path) to compress."),
       strParam("dest", "Destination .zip path."),
@@ -314,6 +325,7 @@ const TOOL_SUITE: SuiteTool[] = [
   {
     name: "open_url",
     description: "Open a URL in the default browser.",
+    blurb: "Pop a link open in your browser for you.",
     parameters: [strParam("url", "The URL to open.")],
     command: ["powershell", "-NoProfile", "-Command", "Start-Process '{url}'"],
     timeout_seconds: 15,
@@ -517,10 +529,10 @@ export default function ToolsPage() {
       });
       setMcpOk(
         res.note
-          ? `Server "${serverName}" added — ${res.note}`
-          : `Server "${serverName}" added — ${res.tools_loaded} tool${
+          ? `Tool pack "${serverName}" connected — ${res.note}`
+          : `Tool pack "${serverName}" connected — ${res.tools_loaded} tool${
               res.tools_loaded === 1 ? "" : "s"
-            } loaded and live.`,
+            } ready to use.`,
       );
       setCfgId(null);
       reloadServers();
@@ -539,7 +551,7 @@ export default function ToolsPage() {
     try {
       await del(`/mcp/servers/${encodeURIComponent(serverName)}`);
       setMcpOk(
-        `Server "${serverName}" removed. Restart the daemon to fully unload its tools.`,
+        `Tool pack "${serverName}" disconnected. Restart Iron Jarvis to fully unload its tools.`,
       );
       reloadServers();
     } catch (err) {
@@ -602,10 +614,11 @@ export default function ToolsPage() {
       {/*  Hero — describe a tool in plain language, an LLM builds it        */}
       {/* ------------------------------------------------------------------ */}
       <Reveal>
-        <Card title="Describe the tool you want" icon={<Sparkles size={15} />}>
+        <Card title="Teach Iron Jarvis something new" icon={<Sparkles size={15} />}>
           <p className="mb-3.5 text-sm text-zinc-400">
-            Say what it should do in plain language. An on-board model designs the
-            command, names it, and registers it — every agent can call it immediately.
+            Say what you want it to be able to do, in plain language. Iron Jarvis
+            designs the command, names it, and saves it — every agent can use it
+            right away.
           </p>
           <form onSubmit={generate} className="space-y-3">
             <textarea
@@ -677,15 +690,18 @@ export default function ToolsPage() {
       {/* ------------------------------------------------------------------ */}
       <Reveal>
         <Card
-          title={`Custom tools${tools.length ? ` · ${tools.length}` : ""}`}
+          title={`Your tools${tools.length ? ` · ${tools.length}` : ""}`}
           icon={<Wrench size={15} />}
         >
+          <p className="mb-3.5 text-sm text-zinc-400">
+            Commands you&apos;ve taught Iron Jarvis — every agent can use them by name.
+          </p>
           {loading && !data ? (
             <SkeletonRows rows={4} />
           ) : tools.length === 0 ? (
             <Empty icon={<Wrench size={24} />}>
-              No custom tools yet. Describe one above and hit Build — every agent will
-              be able to call it.
+              You haven&apos;t taught Iron Jarvis any commands yet. Describe one above
+              and hit Build — every agent will be able to use it.
             </Empty>
           ) : (
             <div className="space-y-3">
@@ -775,13 +791,14 @@ export default function ToolsPage() {
       {/* ------------------------------------------------------------------ */}
       <Reveal>
         <Card
-          title={`Tool suite · ${TOOL_SUITE.length}`}
+          title={`Ready-made tools · ${TOOL_SUITE.length}`}
           icon={<Boxes size={15} />}
         >
           <p className="mb-4 text-sm text-zinc-400">
-            Ready-made, Windows-friendly tools. Click{" "}
+            One-click helpers for everyday jobs — checking a website, zipping a
+            folder, seeing what&apos;s eating your disk. Click{" "}
             <span className="font-medium text-accent-soft">Add</span> and every agent
-            can call it by name — no setup required.
+            can use it — no setup, built for Windows.
           </p>
           {suiteOk && (
             <div className="mb-3">
@@ -833,9 +850,9 @@ export default function ToolsPage() {
                     )}
                   </div>
 
-                  <p className="mt-2 text-[13px] text-zinc-400">{t.description}</p>
+                  <p className="mt-2 text-[13px] text-zinc-400">{t.blurb}</p>
 
-                  {/* argv command preview */}
+                  {/* exact command it will run, shown as chips */}
                   <div className="mt-3">
                     <ArgvChips argv={t.command} />
                   </div>
@@ -857,10 +874,11 @@ export default function ToolsPage() {
       {/*  MCP — plug-in tool servers                                        */}
       {/* ------------------------------------------------------------------ */}
       <Reveal>
-        <Card title="Connect an MCP server" icon={<Plug size={15} />}>
+        <Card title="Plug-in tool packs (MCP)" icon={<Plug size={15} />}>
           <p className="mb-4 text-sm text-zinc-400">
-            MCP servers are plug-in tool packs (Model Context Protocol). Connect one
-            and every tool it exposes becomes available to your agents.
+            Tool packs bundle whole new abilities — talking to databases, browsing
+            the web, using cloud apps. Connect one and everything inside it becomes
+            available to your agents.
           </p>
 
           {mcpOk && (
@@ -876,14 +894,14 @@ export default function ToolsPage() {
 
           {/* Catalog grid ------------------------------------------------- */}
           <div className="mb-2.5">
-            <SectionLabel>Catalog</SectionLabel>
+            <SectionLabel>Popular packs</SectionLabel>
           </div>
           {catError ? (
             <p className="text-[13px] text-zinc-600">
-              Catalog unavailable{catError.status !== 0 ? ` — ${catError.message}` : ""}.
+              Pack list unavailable{catError.status !== 0 ? ` — ${catError.message}` : ""}.
             </p>
           ) : catalog.length === 0 ? (
-            <p className="text-[13px] text-zinc-600">No catalog entries.</p>
+            <p className="text-[13px] text-zinc-600">No packs to show.</p>
           ) : (
             <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
               {catalog.map((entry) => {
@@ -1021,7 +1039,7 @@ export default function ToolsPage() {
 
           {/* Suggest a server ---------------------------------------------- */}
           <div className="mb-2.5 mt-6">
-            <SectionLabel>Describe what you want to connect</SectionLabel>
+            <SectionLabel>Or describe what you want to connect</SectionLabel>
           </div>
           <form onSubmit={suggest} className="flex flex-col gap-2 sm:flex-row">
             <input
@@ -1093,7 +1111,7 @@ export default function ToolsPage() {
                     <LoaderInline label="Adding…" />
                   ) : (
                     <>
-                      <Plus size={14} /> Add this server
+                      <Plus size={14} /> Connect this pack
                     </>
                   )}
                 </button>
@@ -1114,14 +1132,14 @@ export default function ToolsPage() {
           {/* Connected servers --------------------------------------------- */}
           <div className="mb-2.5 mt-6">
             <SectionLabel>
-              Connected servers{servers.length ? ` · ${servers.length}` : ""}
+              Connected packs{servers.length ? ` · ${servers.length}` : ""}
             </SectionLabel>
           </div>
           {mcpLoading && !mcpData ? (
             <SkeletonRows rows={2} />
           ) : servers.length === 0 ? (
             <p className="text-[13px] text-zinc-600">
-              No MCP servers connected yet — add one from the catalog above.
+              No tool packs connected yet — add one from the list above.
             </p>
           ) : (
             <div className="space-y-2">
@@ -1152,7 +1170,7 @@ export default function ToolsPage() {
                   <ConfirmButton
                     onConfirm={() => removeServer(s.name)}
                     label="Delete"
-                    title={`Disconnect MCP server "${s.name}"`}
+                    title={`Disconnect tool pack "${s.name}"`}
                   />
                 </div>
               ))}
@@ -1171,9 +1189,9 @@ export default function ToolsPage() {
               size={15}
               className="text-accent-soft/80 transition-transform duration-200 group-open:rotate-90"
             />
-            Manual tool builder (advanced)
+            Build a tool by hand (advanced)
             <span className="font-normal text-zinc-500">
-              — write the argv template yourself
+              — write the exact command yourself
             </span>
           </summary>
           <div className="space-y-4 border-t hairline p-5">
@@ -1181,21 +1199,21 @@ export default function ToolsPage() {
               <Info size={18} className="mt-0.5 shrink-0 text-accent-soft" />
               <div className="text-sm text-zinc-400">
                 <span className="font-semibold text-zinc-200">How it works.</span> A tool
-                runs an <span className="text-zinc-200">argv command template</span> with
-                no shell, so it&apos;s injection-safe. Typed{" "}
+                is <span className="text-zinc-200">one command with fill-in-the-blank slots</span>.
+                Iron Jarvis fills each{" "}
                 <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-[12px] text-accent-soft">
                   {"{param}"}
                 </code>{" "}
-                placeholders get filled from the parameters you declare. For example, the
-                command{" "}
+                slot from the parameters you declare below — and only those slots, so
+                nothing unexpected can sneak into the command. For example,{" "}
                 <code className="rounded bg-black/40 px-1.5 py-0.5 font-mono text-[12px] text-zinc-200">
                   wc -l {"{file}"}
                 </code>{" "}
-                with a required string parameter{" "}
+                with a required{" "}
                 <code className="rounded bg-black/40 px-1 py-0.5 font-mono text-[12px] text-accent-soft">
                   file
                 </code>{" "}
-                counts the lines in whatever path the agent passes.
+                parameter counts the lines in whatever file an agent passes.
               </div>
             </div>
 
@@ -1211,7 +1229,7 @@ export default function ToolsPage() {
                   className="field font-mono"
                 />
                 <div className="mt-1 text-[11px] text-zinc-600">
-                  A unique identifier. Can&apos;t collide with a built-in tool.
+                  A short, unique name agents will call it by.
                 </div>
               </div>
 
@@ -1230,7 +1248,7 @@ export default function ToolsPage() {
 
               <div>
                 <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
-                  <Terminal size={12} /> Command (argv)
+                  <Terminal size={12} /> Command
                 </label>
                 <input
                   value={command}
@@ -1239,9 +1257,9 @@ export default function ToolsPage() {
                   className="field font-mono"
                 />
                 <div className="mt-1 text-[11px] text-zinc-600">
-                  Space-separated tokens. Use{" "}
-                  <code className="font-mono text-accent-soft/80">{"{param}"}</code> to
-                  inject a parameter below.
+                  The command, word by word. Write{" "}
+                  <code className="font-mono text-accent-soft/80">{"{param}"}</code>{" "}
+                  wherever a parameter below should fill in the blank.
                 </div>
                 {argv.length > 0 && (
                   <div className="mt-2">
@@ -1267,7 +1285,7 @@ export default function ToolsPage() {
                 <div className="space-y-2 rounded-xl border border-white/[0.06] bg-ink-900/40 p-2.5">
                   {rows.length === 0 ? (
                     <p className="px-0.5 py-1 text-[11px] text-zinc-600">
-                      No parameters. Add one for each{" "}
+                      No fill-in-the-blanks yet. Add one for each{" "}
                       <code className="font-mono text-accent-soft/70">
                         {"{placeholder}"}
                       </code>{" "}

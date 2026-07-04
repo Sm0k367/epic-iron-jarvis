@@ -83,12 +83,14 @@ const SECTIONS: SectionDef[] = [
 const FIELDS: FieldDef[] = [
   // --- Models & routing ---------------------------------------------------
   {
+    // Rendered as a <select>; its options are injected at render time from the
+    // shared /health poll (only providers reporting available are offered).
     key: "default_provider",
     label: "Default provider",
-    type: "text",
+    type: "select",
     section: "models",
     placeholder: "anthropic",
-    hint: "The AI service used when a chat doesn't pick one. Manage providers + keys on Connections.",
+    hint: "The AI service used when a chat doesn't pick one. Only providers currently available are listed — manage providers + keys on Connections.",
   },
   {
     key: "default_model",
@@ -386,8 +388,9 @@ export default function SettingsPage() {
   const [token, setToken] = useState("");
   const [tokenNote, setTokenNote] = useState<string | null>(null);
 
-  // Maintenance actions (backup / restart).
-  const { refresh } = useDaemon();
+  // Maintenance actions (backup / restart) + provider options for the
+  // default_provider dropdown, both off the shared /health poll.
+  const { refresh, health } = useDaemon();
   const [backupBusy, setBackupBusy] = useState(false);
   const [restarting, setRestarting] = useState(false);
   const [maintOk, setMaintOk] = useState<string | null>(null);
@@ -417,6 +420,17 @@ export default function SettingsPage() {
   }, []);
 
   const offline = loadError && loadError.status === 0;
+
+  // Providers the daemon reports as available right now (from /health). The
+  // FieldRow <select> itself keeps the currently-saved value selectable even
+  // if it isn't in this list, so an existing choice is never silently lost.
+  const providerOptions = useMemo<string[]>(
+    () =>
+      (health?.providers ?? [])
+        .filter((p) => p.available)
+        .map((p) => p.provider),
+    [health],
+  );
 
   const changed = useMemo(() => {
     if (!original) return {} as Record<string, Value>;
@@ -540,7 +554,11 @@ export default function SettingsPage() {
                         {fields.map((f) => (
                           <FieldRow
                             key={f.key}
-                            def={f}
+                            def={
+                              f.key === "default_provider"
+                                ? { ...f, options: providerOptions }
+                                : f
+                            }
                             value={form[f.key]}
                             onChange={(v) => update(f.key, v)}
                           />

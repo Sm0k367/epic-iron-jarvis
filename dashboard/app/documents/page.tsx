@@ -28,6 +28,7 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
+import { FilePickerModal } from "@/components/FilePickerModal";
 
 /* -------------------------------------------------------------------------- */
 /*  File-type detection (from the path/filename suffix)                        */
@@ -83,6 +84,7 @@ export default function DocumentsPage() {
   const [readBusy, setReadBusy] = useState(false);
   const [readError, setReadError] = useState<string | null>(null);
   const [readOffline, setReadOffline] = useState(false);
+  const [browseOpen, setBrowseOpen] = useState(false);
 
   /* ---- Create document -------------------------------------------------- */
   const [name, setName] = useState("");
@@ -175,6 +177,14 @@ export default function DocumentsPage() {
                     />
                   </div>
                   <button
+                    type="button"
+                    onClick={() => setBrowseOpen(true)}
+                    title="Browse for a file"
+                    className="btn-ghost shrink-0"
+                  >
+                    <FolderOpen size={14} /> Browse…
+                  </button>
+                  <button
                     type="submit"
                     disabled={readBusy || !readPath.trim()}
                     className="btn-accent shrink-0"
@@ -183,7 +193,7 @@ export default function DocumentsPage() {
                       <LoaderInline label="Reading…" />
                     ) : (
                       <>
-                        <FolderOpen size={14} /> Extract text
+                        <FileDown size={14} /> Extract text
                       </>
                     )}
                   </button>
@@ -306,6 +316,13 @@ export default function DocumentsPage() {
           </Card>
         </div>
       </Reveal>
+
+      <FilePickerModal
+        open={browseOpen}
+        onClose={() => setBrowseOpen(false)}
+        onPick={(path) => setReadPath(path)}
+        title="Pick a file to read"
+      />
     </PageShell>
   );
 }

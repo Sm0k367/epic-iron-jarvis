@@ -55,6 +55,37 @@ const KNOWN_TOOLS = [
   "delegate",
 ];
 
+/**
+ * Friendly "what this lets the agent do" labels for the tool checkboxes.
+ * Unknown names simply fall back to the raw tool name.
+ */
+const TOOL_LABELS: Record<string, { label: string; hint: string }> = {
+  read_file: { label: "Read files", hint: "Open and read file contents" },
+  write_file: { label: "Write files", hint: "Create new files on disk" },
+  edit_file: { label: "Edit files", hint: "Change existing files" },
+  list_files: { label: "Browse folders", hint: "See what's inside a directory" },
+  grep: { label: "Search inside files", hint: "Find text across many files" },
+  shell: { label: "Run commands", hint: "Execute terminal commands" },
+  memory_write: { label: "Save session notes", hint: "Jot things down while working" },
+  memory_read: { label: "Read session notes", hint: "Look up notes it saved" },
+  memory_search: { label: "Search session notes", hint: "Find a note from earlier" },
+  skill_search: { label: "Find skills", hint: "Look for a matching playbook" },
+  skill_load: { label: "Use skills", hint: "Follow a skill's playbook" },
+  secret_list: { label: "See stored key names", hint: "Names only — never the values" },
+  secret_set: { label: "Store keys", hint: "Save API keys to the vault" },
+  integration_list: { label: "See connected services", hint: "List what's hooked up" },
+  integration_test: { label: "Test connections", hint: "Check a service is working" },
+  file_search: { label: "Find files on disk", hint: "Search your drive for files" },
+  notify: { label: "Send you notifications", hint: "Ping you via Slack, Telegram, etc." },
+  ltm_search: { label: "Search long-term memory", hint: "Recall things from past sessions" },
+  ltm_append: { label: "Save to long-term memory", hint: "Remember things for next time" },
+  create_agent: { label: "Create new agents", hint: "Define brand-new helpers" },
+  list_agents: { label: "See available agents", hint: "Know who it can call on" },
+  spawn_agent: { label: "Start helper agents", hint: "Kick off another agent on a task" },
+  delegate: { label: "Hand work to other agents", hint: "Assign a task, get the result back" },
+  web_search: { label: "Search the web", hint: "Look things up online" },
+};
+
 /** A stable key for a {provider, model} pair used as the <select> value. */
 const modelKey = (m: ModelOption) => `${m.provider}|${m.model}`;
 
@@ -264,25 +295,47 @@ export default function AgentsPage() {
                 <div className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   <Wrench size={12} /> Tools{tools.length ? ` · ${tools.length}` : ""}
                 </div>
-                <div className="grid max-h-44 grid-cols-2 gap-1.5 overflow-y-auto rounded-xl border border-white/[0.06] bg-ink-900/50 p-2.5 sm:grid-cols-3">
+                <div className="grid max-h-64 grid-cols-1 gap-1.5 overflow-y-auto rounded-xl border border-white/[0.06] bg-ink-900/50 p-2.5 sm:grid-cols-2">
                   {KNOWN_TOOLS.map((t) => {
                     const on = tools.includes(t);
+                    const meta: { label: string; hint: string } | undefined =
+                      TOOL_LABELS[t];
                     return (
                       <label
                         key={t}
-                        className={`flex cursor-pointer items-center gap-1.5 rounded-lg border px-2 py-1 text-[11px] font-mono transition-colors ${
+                        className={`flex cursor-pointer items-start gap-2 rounded-lg border px-2 py-1.5 transition-colors ${
                           on
-                            ? "border-accent/40 bg-accent/[0.1] text-accent-soft"
-                            : "border-transparent text-zinc-400 hover:bg-white/[0.04]"
+                            ? "border-accent/40 bg-accent/[0.1]"
+                            : "border-transparent hover:bg-white/[0.04]"
                         }`}
                       >
                         <input
                           type="checkbox"
                           checked={on}
                           onChange={() => toggleTool(t)}
-                          className="h-3 w-3 accent-[#22d3ee]"
+                          className="mt-0.5 h-3 w-3 shrink-0 accent-[#22d3ee]"
                         />
-                        {t}
+                        <span className="min-w-0">
+                          <span className="flex flex-wrap items-center gap-x-1.5 gap-y-0.5">
+                            <span
+                              className={`text-[11px] font-medium leading-tight ${
+                                meta ? "" : "font-mono"
+                              } ${on ? "text-accent-soft" : "text-zinc-300"}`}
+                            >
+                              {meta?.label ?? t}
+                            </span>
+                            {meta && (
+                              <span className="rounded bg-white/[0.06] px-1 font-mono text-[9px] leading-4 text-zinc-500">
+                                {t}
+                              </span>
+                            )}
+                          </span>
+                          {meta && (
+                            <span className="mt-0.5 block text-[10px] leading-tight text-zinc-500">
+                              {meta.hint}
+                            </span>
+                          )}
+                        </span>
                       </label>
                     );
                   })}

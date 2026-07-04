@@ -16,6 +16,7 @@ import {
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { VoiceInput, appendDictation } from "@/components/VoiceInput";
+import { FilePickerModal } from "@/components/FilePickerModal";
 
 type Mode = "content" | "name" | "semantic";
 const MODES: Mode[] = ["content", "name", "semantic"];
@@ -32,6 +33,7 @@ export default function FileSearchPage() {
   const [rootSel, setRootSel] = useState(PROJECT_ROOT);
   // Optional free-text path to drill into a sub-folder; overrides the select.
   const [customPath, setCustomPath] = useState("");
+  const [browseOpen, setBrowseOpen] = useState(false);
   const [results, setResults] = useState<FileSearchResult[] | null>(null);
   const [searchedRoot, setSearchedRoot] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -145,12 +147,22 @@ export default function FileSearchPage() {
                 <label className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-400">
                   <FolderOpen size={12} /> Or a specific folder path
                 </label>
-                <input
-                  value={customPath}
-                  onChange={(e) => setCustomPath(e.target.value)}
-                  placeholder="e.g. C:\\Users\\me\\Documents (optional)"
-                  className="field font-mono"
-                />
+                <div className="flex items-stretch gap-2">
+                  <input
+                    value={customPath}
+                    onChange={(e) => setCustomPath(e.target.value)}
+                    placeholder="e.g. C:\\Users\\me\\Documents (optional)"
+                    className="field font-mono"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setBrowseOpen(true)}
+                    title="Browse for a folder to search in"
+                    className="btn-ghost shrink-0"
+                  >
+                    <FolderOpen size={14} /> Browse…
+                  </button>
+                </div>
               </div>
             </div>
 
@@ -233,6 +245,14 @@ export default function FileSearchPage() {
           )}
         </Card>
       </Reveal>
+
+      <FilePickerModal
+        open={browseOpen}
+        onClose={() => setBrowseOpen(false)}
+        onPick={(path) => setCustomPath(path)}
+        pickFolders
+        title="Pick a folder to search in"
+      />
     </PageShell>
   );
 }

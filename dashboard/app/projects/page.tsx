@@ -12,6 +12,7 @@ import {
   ChevronDown,
   ChevronUp,
   Folder,
+  FolderOpen,
   History,
 } from "lucide-react";
 import { api, get, post, ApiError } from "@/lib/api";
@@ -31,6 +32,7 @@ import {
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
+import { FilePickerModal } from "@/components/FilePickerModal";
 import { timeAgo } from "@/lib/format";
 
 /** api.ts exports no PATCH helper, so build one on the exported generic `api`. */
@@ -358,6 +360,7 @@ export default function ProjectsPage() {
   const [name, setName] = useState("");
   const [brief, setBrief] = useState("");
   const [root, setRoot] = useState("");
+  const [rootPickerOpen, setRootPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [ok, setOk] = useState<string | null>(null);
@@ -440,12 +443,33 @@ export default function ProjectsPage() {
                     <Folder size={12} /> Folder root{" "}
                     <span className="text-zinc-600">(optional)</span>
                   </label>
-                  <input
-                    value={root}
-                    onChange={(e) => setRoot(e.target.value)}
-                    placeholder="C:\Users\me\Projects\q3-taxes"
-                    aria-label="Project folder root"
-                    className="field font-mono text-sm"
+                  <div className="flex items-stretch gap-2">
+                    <input
+                      value={root}
+                      onChange={(e) => setRoot(e.target.value)}
+                      placeholder="C:\Users\me\Projects\q3-taxes"
+                      aria-label="Project folder root"
+                      className="field min-w-0 flex-1 font-mono text-sm"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setRootPickerOpen(true)}
+                      title="Browse folders on this machine"
+                      aria-label="Browse for a project folder"
+                      className="btn-ghost shrink-0"
+                    >
+                      <FolderOpen size={14} /> Browse…
+                    </button>
+                  </div>
+                  <FilePickerModal
+                    open={rootPickerOpen}
+                    onClose={() => setRootPickerOpen(false)}
+                    onPick={(path: string) => {
+                      setRoot(path);
+                      setRootPickerOpen(false);
+                    }}
+                    pickFolders
+                    title="Choose the project folder"
                   />
                 </div>
 

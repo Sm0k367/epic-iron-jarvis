@@ -74,6 +74,14 @@ class SessionCreate(BaseModel):
     project_id: str = ""
 
 
+class SkillApplyBody(BaseModel):
+    """Use a skill directly: the skill's playbook + this request, one shot."""
+
+    request: str
+    provider: str = ""
+    model: str = ""
+
+
 class ChatMessageBody(BaseModel):
     role: str  # user | assistant
     content: str
@@ -1746,6 +1754,54 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "lessons": [
                 lr.model_dump() for lr in platform.learning.lessons(scope=scope, limit=limit)
             ]
+        }
+
+    @app.delete("/lessons/{lesson_id}")
+    def delete_lesson(lesson_id: str) -> dict[str, Any]:
+        """Remove one learned lesson — the user curates what sticks."""
+        from ..learning.models import LessonRecord
+
+        with session_scope(platform.engine) as db:
+            r = db.get(LessonRecord, lesson_id)
+            if r is None:
+                raise HTTPException(status_code=404, detail="no such lesson")
+            db.delete(r)
+            db.commit()
+        return {"deleted": lesson_id}
+
+    @app.post("/skills/{name}/apply")
+    async def apply_skill(name: str, body: SkillApplyBody) -> dict[str, Any]:
+        """USE a skill right here: the skill's full instructions + the user's
+        request go to the model in one shot (retry/failover included) and the
+        result comes straight back — no session plumbing."""
+        sk = platform.skills.get(name)
+        if sk is None:
+            raise HTTPException(status_code=404, detail="no such skill")
+        if not (body.request or "").strip():
+            raise HTTPException(status_code=400, detail="request is required")
+        provider = body.provider or platform.config.default_provider
+        model = body.model or platform.config.default_model
+        try:
+            adapter = platform.providers.get(provider, model)
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(status_code=400, detail=f"provider unavailable: {exc}")
+        from ..providers.adapters.base import LLMMessage
+
+        system = (
+            "Fulfil the user's request by FOLLOWING this skill playbook exactly.\n\n"
+            f"# Skill: {sk.name}\n{sk.instructions[:8000]}"
+        )
+        resp, used_provider, used_model = await _one_shot_complete(
+            provider,
+            adapter,
+            system=system,
+            messages=[LLMMessage(role="user", content=body.request.strip()[:6000])],
+        )
+        return {
+            "reply": resp.text or "(no reply)",
+            "skill": sk.name,
+            "provider": used_provider,
+            "model": used_model,
         }
 
     # --- ImprovementEngine: outcomes feed back into lessons + proposals ----
