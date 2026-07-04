@@ -1201,8 +1201,22 @@ function initUpdater() {
     _emitUpdateState({ status: "downloading", percent: Math.round((p && p.percent) || 0) })
   );
   autoUpdater.on("error", (err) => {
-    console.error("[update] error:", err && err.message);
-    _emitUpdateState({ status: "error", error: (err && err.message) || "update failed" });
+    const msg = (err && err.message) || "update failed";
+    console.error("[update] error:", msg);
+    // The PUBLISHING WINDOW: CI creates the release first, then uploads the
+    // installer + latest.yml over the next ~10 minutes. Checking during that
+    // window 404s on latest.yml — that's "an update is on its way", not an
+    // error worth a stack trace.
+    if (/latest\.yml/i.test(msg) && /404|not.*found|cannot find/i.test(msg)) {
+      _emitUpdateState({
+        status: "error",
+        error:
+          "A new version is publishing right now — its files are still uploading. " +
+          "Check again in a few minutes.",
+      });
+      return;
+    }
+    _emitUpdateState({ status: "error", error: msg });
   });
   autoUpdater.on("update-available", (info) => {
     console.log("[update] available:", info && info.version);
