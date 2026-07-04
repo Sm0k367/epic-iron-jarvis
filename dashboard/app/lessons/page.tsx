@@ -1,13 +1,17 @@
 "use client";
 
+import { useState } from "react";
 import {
   GraduationCap,
+  Loader2,
   Star,
   MessageSquare,
   Brain,
   Sparkles,
+  Trash2,
   type LucideIcon,
 } from "lucide-react";
+import { del } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import type { Lesson } from "@/lib/types";
 import {
@@ -62,12 +66,26 @@ function metaFor(source: string): SourceMeta {
 }
 
 export default function LessonsPage() {
-  const { data, error, loading } = useApi<{ lessons: Lesson[] }>(
+  const { data, error, loading, reload } = useApi<{ lessons: Lesson[] }>(
     "/lessons?limit=50",
   );
 
   const offline = error && error.status === 0;
   const lessons = data?.lessons ?? [];
+
+  // The user curates what sticks: forget a lesson -> it stops shaping runs.
+  const [deleting, setDeleting] = useState<string | null>(null);
+  async function forget(id: string) {
+    setDeleting(id);
+    try {
+      await del(`/lessons/${encodeURIComponent(id)}`);
+      reload();
+    } catch {
+      /* already gone / offline — the list refresh reflects reality */
+    } finally {
+      setDeleting(null);
+    }
+  }
 
   return (
     <PageShell>
@@ -142,6 +160,21 @@ export default function LessonsPage() {
                         )}
                       </div>
                     </div>
+                    {lesson.id && (
+                      <button
+                        type="button"
+                        onClick={() => void forget(lesson.id as string)}
+                        disabled={deleting === lesson.id}
+                        title="Forget this lesson — it stops shaping future runs"
+                        className="mt-0.5 grid h-7 w-7 shrink-0 place-items-center rounded-md text-zinc-600 opacity-0 transition-all hover:bg-rose-500/15 hover:text-rose-300 group-hover:opacity-100 disabled:opacity-50"
+                      >
+                        {deleting === lesson.id ? (
+                          <Loader2 size={13} className="animate-spin" />
+                        ) : (
+                          <Trash2 size={13} />
+                        )}
+                      </button>
+                    )}
                   </li>
                 );
               })}
