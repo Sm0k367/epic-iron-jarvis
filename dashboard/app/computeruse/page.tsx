@@ -22,10 +22,14 @@ import {
   Inbox,
   RefreshCw,
   MonitorPlay,
+  History,
+  ChevronDown,
+  ChevronRight,
   type LucideIcon,
 } from "lucide-react";
 import { post, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
+import { useEvents } from "@/lib/useEvents";
 import type { ComputerUseStatus, Approval } from "@/lib/types";
 import {
   Card,
@@ -59,6 +63,36 @@ interface LiveScreen {
 interface LiveScreenState {
   screen: LiveScreen | null;
   enabled: boolean;
+}
+
+/** GET /computeruse/runs?limit=20 — recent run history, newest first. */
+interface RunSummary {
+  id: string;
+  task: string;
+  status: string;
+  ok: boolean | null;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+/** GET /computeruse/runs/{id} — the full run row incl. its recorded trace. */
+interface RunDetail {
+  id: string;
+  task: string;
+  status: string;
+  steps: number;
+  trace_json: string;
+  created_at?: string | null;
+  finished_at?: string | null;
+}
+
+/** One TraceRecorder entry (computeruse/trace.py): monotonic seq + kind, with
+ *  kind-specific fields (action/result/screenshot/error/artifact/note/approval). */
+interface TraceEntry {
+  seq?: number;
+  ts?: string;
+  kind?: string;
+  [key: string]: unknown;
 }
 
 /* -------------------------------------------------------------------------- */
@@ -235,6 +269,142 @@ function ApprovalCard({
 }
 
 /* -------------------------------------------------------------------------- */
+/*  Run history                                                                */
+/* -------------------------------------------------------------------------- */
+
+/** Badge colors for a run's terminal state: completed = good, failed/blocked =
+ *  bad, anything still in flight (running / awaiting_approval) = amber. */
+function runBadgeClass(status: string, ok: boolean | null): string {
+  if (ok === true || status === "completed")
+    return "border-emerald-500/25 bg-emerald-500/10 text-emerald-300";
+  if (ok === false || status === "failed" || status === "blocked")
+    return "border-rose-500/25 bg-rose-500/10 text-rose-300";
+  return "border-amber-500/25 bg-amber-500/10 text-amber-300";
+}
+
+function runBadgeLabel(status: string, ok: boolean | null): string {
+  if (status === "running" || status === "awaiting_approval") return status;
+  if (ok === true || status === "completed") return `${status} · ok`;
+  if (ok === false || status === "failed" || status === "blocked")
+    return `${status} · failed`;
+  return status;
+}
+
+const TRACE_KIND_COLOR: Record<string, string> = {
+  action: "text-accent-soft",
+  result: "text-zinc-300",
+  screenshot: "text-violet-300",
+  error: "text-rose-300",
+  artifact: "text-amber-300",
+  note: "text-zinc-400",
+  approval: "text-amber-300",
+};
+
+/** Selector/value summary shared by action + result entries (both embed the
+ *  serialized Action — kind, selector {role,name,text,css}, value). */
+function describeTraceAction(a: unknown): string {
+  if (!a || typeof a !== "object") return "";
+  const action = a as Record<string, unknown>;
+  const parts: string[] = [String(action.kind ?? "action")];
+  const sel = action.selector;
+  if (sel && typeof sel === "object") {
+    const s = sel as Record<string, unknown>;
+    if (s.role) parts.push(`role=${String(s.role)}`);
+    if (s.name) parts.push(`"${String(s.name)}"`);
+    if (s.text) parts.push(`text="${String(s.text)}"`);
+    if (s.css) parts.push(`css=${String(s.css)}`);
+  }
+  if (action.value !== undefined && action.value !== null && action.value !== "")
+    parts.push(`value="${String(action.value)}"`);
+  return parts.join(" ");
+}
+
+/** One-line summary for a trace entry, keyed on its kind. */
+function traceSummary(e: TraceEntry): string {
+  switch (e.kind) {
+    case "action": {
+      const bits = [describeTraceAction(e.action)];
+      if (e.checkpoint) bits.push(`→ ${String(e.checkpoint)}`);
+      return bits.filter(Boolean).join(" ");
+    }
+    case "result": {
+      const bits = [describeTraceAction(e.action)];
+      if (e.ok === true) bits.push("ok");
+      if (e.ok === false) bits.push("FAILED");
+      if (e.error) bits.push(String(e.error));
+      else if (e.output) bits.push(String(e.output).slice(0, 160));
+      if (e.url) bits.push(String(e.url));
+      return bits.filter(Boolean).join(" · ");
+    }
+    case "screenshot":
+      return `${String(e.label ?? "screenshot")} → ${String(e.path ?? "")}`;
+    case "error":
+      return `${String(e.message ?? "")}${e.where ? ` (${String(e.where)})` : ""}`;
+    case "artifact":
+      return `${String(e.name ?? "")} → ${String(e.path ?? "")}`;
+    case "note":
+      return String(e.message ?? "");
+    case "approval":
+      return `${String(e.status ?? "")} — ${String(e.reason ?? "")}`;
+    default:
+      return "";
+  }
+}
+
+/** Inline detail for one expanded run: fetches the EXISTING per-run endpoint
+ *  and renders the recorded trace compactly (seq · kind · summary). */
+function RunDetailView({ runId }: { runId: string }) {
+  const { data, error, loading } = useApi<RunDetail>(`/computeruse/runs/${runId}`);
+  const trace = useMemo<TraceEntry[]>(() => {
+    if (!data?.trace_json) return [];
+    try {
+      const parsed: unknown = JSON.parse(data.trace_json);
+      return Array.isArray(parsed) ? (parsed as TraceEntry[]) : [];
+    } catch {
+      return [];
+    }
+  }, [data]);
+
+  if (loading && !data) return <SkeletonRows rows={2} />;
+  if (error)
+    return (
+      <div className="py-1 text-xs text-zinc-500">
+        Couldn&apos;t load the trace — {error.message}
+      </div>
+    );
+  if (trace.length === 0)
+    return <div className="py-1 text-xs text-zinc-600">No trace recorded for this run.</div>;
+
+  return (
+    <ol className="max-h-64 space-y-0.5 overflow-y-auto pr-1 font-mono text-[11px]">
+      {trace.map((t, i) => {
+        const summary = traceSummary(t);
+        return (
+          <li
+            key={i}
+            className="flex items-baseline gap-2.5 rounded-md px-2 py-1 hover:bg-white/[0.03]"
+          >
+            <span className="w-7 shrink-0 text-right tabular-nums text-zinc-600">
+              {t.seq ?? i + 1}
+            </span>
+            <span
+              className={`w-20 shrink-0 font-medium ${
+                TRACE_KIND_COLOR[String(t.kind)] ?? "text-zinc-300"
+              }`}
+            >
+              {String(t.kind ?? "?")}
+            </span>
+            <span className="min-w-0 flex-1 truncate text-zinc-400" title={summary}>
+              {summary}
+            </span>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
 /*  Best-practices list                                                        */
 /* -------------------------------------------------------------------------- */
 
@@ -324,6 +494,26 @@ export default function ComputerUsePage() {
   }
 
   const approvals = approvalsState.data?.approvals ?? [];
+
+  // Run history. A 404 just means the daemon predates GET /computeruse/runs
+  // (not restarted since the update) — useApi captures it, data stays null,
+  // and the section renders its quiet empty state instead of crashing.
+  const runsState = useApi<{ runs: RunSummary[] }>("/computeruse/runs?limit=20");
+  const runs = runsState.data?.runs ?? [];
+  const [expandedRun, setExpandedRun] = useState<string | null>(null);
+
+  // Auto-refresh the list when a run reaches a terminal state. The buffer is
+  // newest-first, so the first computeruse.run_finished id changes on each new
+  // finish — a stable key that re-triggers exactly one reload per event.
+  const { events } = useEvents(30);
+  const lastFinishedEventId = useMemo(
+    () => events.find((e) => e.type === "computeruse.run_finished")?.id ?? null,
+    [events],
+  );
+  const reloadRuns = runsState.reload;
+  useEffect(() => {
+    if (lastFinishedEventId) reloadRuns();
+  }, [lastFinishedEventId, reloadRuns]);
 
   return (
     <PageShell>
@@ -678,6 +868,72 @@ export default function ComputerUsePage() {
                 <ApprovalCard key={a.id} approval={a} onResolved={approvalsState.reload} />
               ))}
             </div>
+          )}
+        </Card>
+      </Reveal>
+
+      {/* Run history — every run, expandable to its full audit trace */}
+      <Reveal>
+        <Card
+          title="Recent runs"
+          icon={<History size={15} />}
+          right={
+            <span className="flex items-center gap-2 text-[11px] text-zinc-500">
+              <RefreshCw size={12} className="text-accent-soft/70" /> updates when a run
+              finishes
+            </span>
+          }
+        >
+          <p className="mb-4 text-xs leading-relaxed text-zinc-500">
+            The last 20 runs, newest first. Click a run to inspect its recorded trace —
+            every action, result, screenshot reference, and error, in order.
+          </p>
+          {runsState.loading && !runsState.data ? (
+            <SkeletonRows rows={3} />
+          ) : runs.length === 0 ? (
+            <Empty icon={<History size={28} />}>
+              No runs recorded yet — history appears after the first computer-use run.
+            </Empty>
+          ) : (
+            <ul className="space-y-2">
+              {runs.map((r) => {
+                const isOpen = expandedRun === r.id;
+                const Chevron = isOpen ? ChevronDown : ChevronRight;
+                return (
+                  <li
+                    key={r.id}
+                    className="rounded-xl border border-white/[0.06] bg-white/[0.02]"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => setExpandedRun(isOpen ? null : r.id)}
+                      className="flex w-full items-center gap-3 px-3 py-2.5 text-left transition-colors hover:bg-white/[0.03]"
+                    >
+                      <Chevron size={14} className="shrink-0 text-zinc-500" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-sm text-zinc-200" title={r.task}>
+                          {r.task || "(no task)"}
+                        </span>
+                        <span className="mt-0.5 block truncate font-mono text-[10px] text-zinc-600">
+                          {r.id} · started {timeAgo(r.started_at)}
+                          {r.finished_at ? ` · finished ${timeAgo(r.finished_at)}` : ""}
+                        </span>
+                      </span>
+                      <span
+                        className={`shrink-0 rounded-full border px-2 py-0.5 text-[10px] font-medium ${runBadgeClass(r.status, r.ok)}`}
+                      >
+                        {runBadgeLabel(r.status, r.ok)}
+                      </span>
+                    </button>
+                    {isOpen && (
+                      <div className="border-t border-white/[0.06] px-3 py-2.5">
+                        <RunDetailView runId={r.id} />
+                      </div>
+                    )}
+                  </li>
+                );
+              })}
+            </ul>
           )}
         </Card>
       </Reveal>

@@ -20,6 +20,15 @@ const TYPE_COLOR: Record<string, string> = {
   "review.requested": "text-amber-300",
   "provider.failed": "text-rose-300",
   "provider.downgraded": "text-amber-300",
+  // Inbound surfaces: webhooks + two-way comm (received spawns a session;
+  // rejected = unauthorized sender refused by the allowlist).
+  "webhook.received": "text-sky-300",
+  "comm.received": "text-cyan-300",
+  "comm.rejected": "text-rose-300",
+  // Automation: a cron schedule fired an event-kind task.
+  "schedule.fired": "text-indigo-300",
+  // A computer-use run reached a terminal status (completed/failed/blocked).
+  "computeruse.run_finished": "text-fuchsia-300",
 };
 
 export function EventStream() {
@@ -76,7 +85,22 @@ export function EventStream() {
 
 function summarize(payload: Record<string, unknown>): string {
   if (!payload) return "";
-  const keys = ["tool", "name", "status", "state", "risk", "summary"];
+  // channel/sender: comm.* — slug: webhook.received — workflow: schedule.fired —
+  // run_id: computeruse.run_finished. Long values (e.g. task) truncate in the row.
+  const keys = [
+    "tool",
+    "name",
+    "status",
+    "state",
+    "risk",
+    "summary",
+    "channel",
+    "sender",
+    "slug",
+    "workflow",
+    "run_id",
+    "task",
+  ];
   const parts: string[] = [];
   for (const k of keys) {
     if (payload[k] !== undefined && payload[k] !== null) {

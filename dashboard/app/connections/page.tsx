@@ -22,6 +22,7 @@ import {
   HardDrive,
   Terminal,
   Wrench,
+  RefreshCw,
   type LucideIcon,
 } from "lucide-react";
 import { get, post, put, del, ApiError } from "@/lib/api";
@@ -716,9 +717,22 @@ function CliProviderRow({ info, available }: { info: CliProviderInfo; available:
 /*  Page                                                                       */
 /* -------------------------------------------------------------------------- */
 
+/** One entry of POST /providers/rescan's `detected` list (DetectedModel.as_dict). */
+interface RescannedModel {
+  provider: string;
+  model: string;
+  name: string;
+  available: boolean;
+  source: string;
+  base_url: string | null;
+  exec_path: string | null;
+  context_window: number | null;
+  detail: string;
+}
+
 export default function ConnectionsPage() {
   const { data, error, loading, reload } = useApi<{ connections: Connection[] }>("/connections");
-  const { health } = useDaemon();
+  const { health, refresh: refreshHealth } = useDaemon();
   const offline = error && error.status === 0;
   const connections = data?.connections ?? [];
   const connectedCount = connections.filter((c) => c.connected).length;
@@ -731,6 +745,53 @@ export default function ConnectionsPage() {
   const daemonProviders = health?.providers ?? [];
   const isDetected = (provider: string) =>
     daemonProviders.some((p) => p.provider === provider && p.available);
+
+  /* --- Rescan local CLIs (POST /providers/rescan) --------------------------- */
+  // Re-detects locally installed CLI inference providers (Claude/Codex/Grok
+  // CLIs) on demand, so a CLI installed mid-session shows up without a
+  // daemon restart.
+  const [rescanBusy, setRescanBusy] = useState(false);
+  const [rescanNote, setRescanNote] = useState<{ ok: boolean; text: string } | null>(null);
+
+  async function rescanClis() {
+    setRescanBusy(true);
+    setRescanNote(null);
+    try {
+      const r = await post<{ detected: RescannedModel[] }>("/providers/rescan");
+      const detected = r.detected ?? [];
+      const label = (id: string) => CLI_PROVIDERS.find((p) => p.provider === id)?.name ?? id;
+      const ready = [...new Set(detected.filter((m) => m.available).map((m) => m.provider))];
+      const notReady = [
+        ...new Set(detected.filter((m) => !m.available).map((m) => m.provider)),
+      ].filter((p) => !ready.includes(p));
+      const parts: string[] = [];
+      if (ready.length) {
+        const n = detected.filter((m) => m.available).length;
+        parts.push(
+          `${ready.map(label).join(", ")} ready to use (${n} model${n === 1 ? "" : "s"})`,
+        );
+      }
+      for (const p of notReady) {
+        const d = detected.find((m) => m.provider === p && m.detail)?.detail;
+        parts.push(`${label(p)} found but not usable${d ? ` — ${d}` : ""}`);
+      }
+      setRescanNote({
+        ok: true,
+        text: parts.length
+          ? `Rescan complete: ${parts.join("; ")}.`
+          : "Rescan complete — no local CLI providers detected. Install (and log into) the Claude, Codex, or Grok CLI and it will appear here.",
+      });
+      reload(); // connections list
+      refreshHealth(); // /health providers → the "Detected" pills below
+    } catch (err) {
+      setRescanNote({
+        ok: false,
+        text: err instanceof ApiError ? err.message : String(err),
+      });
+    } finally {
+      setRescanBusy(false);
+    }
+  }
 
   /* --- "+ Add connection" dropdown ----------------------------------------- */
   const [menuOpen, setMenuOpen] = useState(false);
@@ -811,7 +872,7 @@ export default function ConnectionsPage() {
                     )}
                     <div className="my-1.5 h-px bg-white/[0.08]" />
                     <Link
-                      href="/ltm"
+                      href="/memory?scope=longterm"
                       role="menuitem"
                       onClick={() => setMenuOpen(false)}
                       className="flex w-full items-center gap-2.5 rounded-lg px-3 py-2 text-xs text-zinc-400 transition-colors hover:bg-white/[0.06] hover:text-zinc-200"
@@ -867,7 +928,33 @@ export default function ConnectionsPage() {
         <Card
           title="Subscription & local providers"
           icon={<Terminal size={16} className="text-accent-soft" />}
+          right={
+            <button
+              type="button"
+              onClick={rescanClis}
+              disabled={rescanBusy}
+              title="Re-detect locally installed CLI providers (Claude, Codex, Grok) without restarting the daemon"
+              className="btn-ghost px-2.5 py-1 text-xs"
+            >
+              {rescanBusy ? (
+                <LoaderInline label="Scanning…" />
+              ) : (
+                <>
+                  <RefreshCw size={13} /> Rescan local CLIs
+                </>
+              )}
+            </button>
+          }
         >
+          {rescanNote && (
+            <div className="mb-3">
+              {rescanNote.ok ? (
+                <SuccessNote>{rescanNote.text}</SuccessNote>
+              ) : (
+                <ErrorNote>{rescanNote.text}</ErrorNote>
+              )}
+            </div>
+          )}
           <div className="divide-y divide-white/[0.06]">
             {CLI_PROVIDERS.map((info) => (
               <CliProviderRow

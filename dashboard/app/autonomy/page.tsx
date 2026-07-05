@@ -14,6 +14,7 @@ import {
   Sun,
   CircleCheck,
   Sparkles,
+  Send,
 } from "lucide-react";
 import { api, post, put, ApiError } from "@/lib/api";
 import { useApi, usePolledApi } from "@/lib/useApi";
@@ -87,8 +88,12 @@ interface Briefing {
   active_goals: number;
   recent_actions: number;
   pending_proposals: number;
+  /** POST only: per-channel send results ({channel: {ok, detail}}), null on GET. */
   pushed: unknown;
 }
+
+/** Shape of `pushed` when the POST actually fanned out to comm channels. */
+type BriefingPushResults = Record<string, { ok?: boolean; detail?: string }>;
 
 /* -------------------------------------------------------------------------- */
 /*  Dials / option sets                                                        */
@@ -132,6 +137,7 @@ export default function AutonomyPage() {
   const [killBusy, setKillBusy] = useState(false);
   const [enableBusy, setEnableBusy] = useState(false);
   const [tickBusy, setTickBusy] = useState(false);
+  const [briefBusy, setBriefBusy] = useState(false);
 
   function flash(ok: string | null, error: string | null = null) {
     setActionOk(ok);
@@ -178,6 +184,43 @@ export default function AutonomyPage() {
       flash(null, errText(err));
     } finally {
       setTickBusy(false);
+    }
+  }
+
+  async function pushBriefing() {
+    setBriefBusy(true);
+    flash(null);
+    try {
+      // POST /autonomy/briefing re-summarises AND pushes to the configured
+      // comm channel(s); `pushed` carries the per-channel send results.
+      const r = await post<Briefing>("/autonomy/briefing");
+      const pushed =
+        r.pushed && typeof r.pushed === "object"
+          ? (r.pushed as BriefingPushResults)
+          : null;
+      const entries = pushed ? Object.entries(pushed) : [];
+      const failed = entries.filter(([, v]) => !v?.ok);
+      if (entries.length === 0) {
+        flash(
+          null,
+          "Briefing was summarised, but no comm channel is configured — nothing was sent. Connect Slack/Telegram/Discord first.",
+        );
+      } else if (failed.length === 0) {
+        flash(`Briefing sent to ${entries.map(([name]) => name).join(", ")}.`);
+      } else {
+        const okCount = entries.length - failed.length;
+        flash(
+          null,
+          `Briefing push failed on ${failed
+            .map(([name, v]) => `${name} (${v?.detail || "unknown error"})`)
+            .join(", ")}${okCount ? ` — ${okCount} other channel${okCount === 1 ? "" : "s"} succeeded` : ""}.`,
+        );
+      }
+      briefing.reload(); // the POST re-summarised — keep the card in sync
+    } catch (err) {
+      flash(null, errText(err));
+    } finally {
+      setBriefBusy(false);
     }
   }
 
@@ -235,6 +278,9 @@ export default function AutonomyPage() {
 
   const killed = !!s?.kill_switch;
   const goalList = goals.data?.goals ?? [];
+  // Exact goal texts already on the books — lets starter recipes render as
+  // "Added ✓" across visits so clicks stay idempotent.
+  const goalTexts = new Set(goalList.map((g) => g.text.trim()));
   const pending = (proposals.data?.proposals ?? []).filter(
     (p) => p.status === "pending",
   );
@@ -382,7 +428,27 @@ export default function AutonomyPage() {
 
       {/* Morning briefing */}
       <Reveal>
-        <Card title="Morning briefing" icon={<Sun size={15} />}>
+        <Card
+          title="Morning briefing"
+          icon={<Sun size={15} />}
+          right={
+            <button
+              type="button"
+              onClick={pushBriefing}
+              disabled={briefBusy}
+              title="Summarise now and push to your connected channels"
+              className="inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+            >
+              {briefBusy ? (
+                <LoaderInline label="Sending…" />
+              ) : (
+                <>
+                  <Send size={13} /> Send briefing to channels
+                </>
+              )}
+            </button>
+          }
+        >
           {briefing.loading && !briefing.data ? (
             <SkeletonRows rows={3} />
           ) : briefing.error && briefing.error.status !== 0 ? (
@@ -395,6 +461,18 @@ export default function AutonomyPage() {
             <Empty icon={<Sun size={24} />}>No briefing available yet.</Empty>
           )}
         </Card>
+      </Reveal>
+
+      {/* Starter goals — one-click, suggest-only seeds for a fresh install */}
+      <Reveal>
+        <StarterGoalsCard
+          existingTexts={goalTexts}
+          onCreated={() => {
+            goals.reload();
+            status.reload();
+          }}
+          onError={(m) => flash(null, m)}
+        />
       </Reveal>
 
       <div className="grid gap-6 lg:grid-cols-2">
@@ -671,6 +749,130 @@ function NewGoalCard({
         </button>
         {ok && <SuccessNote>{ok}</SuccessNote>}
       </form>
+    </Card>
+  );
+}
+
+/* -------------------------------------------------------------------------- */
+/*  Starter goals (one-click, honest, suggest-only recipes for a fresh vault)  */
+/* -------------------------------------------------------------------------- */
+
+const STARTER_GOALS = [
+  {
+    id: "morning-briefing",
+    title: "Morning briefing",
+    description:
+      "A short daily digest: new events, pending reviews, and the one thing worth your attention.",
+    text: "Each deliberation tick in the morning, prepare a short briefing: new events, pending reviews and proposals since yesterday, and the one thing most worth my attention today.",
+    category: "briefing",
+    priority: 3,
+  },
+  {
+    id: "watch-project",
+    title: "Watch the active project",
+    description:
+      "When the active project's files change meaningfully, proposes a summary plus follow-ups.",
+    text: "Keep an eye on the active project: when its files change meaningfully, propose a short summary of what changed and any follow-ups worth doing.",
+    category: "project",
+    priority: 3,
+  },
+  {
+    id: "usage-recap",
+    title: "Weekly usage recap",
+    description:
+      "A rough-weekly recap of token spend and big sessions, with one concrete cost-saving idea.",
+    text: "Roughly weekly, compile a usage recap: token spend by provider and the largest sessions, and propose one concrete cost-saving change.",
+    category: "ops",
+    priority: 2,
+  },
+] as const;
+
+function StarterGoalsCard({
+  existingTexts,
+  onCreated,
+  onError,
+}: {
+  /** Trimmed texts of goals already on the books (for idempotent recipes). */
+  existingTexts: Set<string>;
+  onCreated: () => void;
+  onError: (msg: string) => void;
+}) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [added, setAdded] = useState<Record<string, boolean>>({});
+
+  async function add(recipe: (typeof STARTER_GOALS)[number]) {
+    setBusyId(recipe.id);
+    try {
+      await post("/goals", {
+        text: recipe.text,
+        category: recipe.category,
+        priority: recipe.priority,
+        autonomy_level: "suggest",
+        source: "user",
+      });
+      setAdded((prev) => ({ ...prev, [recipe.id]: true }));
+      onCreated();
+    } catch (err) {
+      onError(errText(err));
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  return (
+    <Card title="Starter goals" icon={<Sparkles size={15} />}>
+      <p className="text-sm text-zinc-400">
+        Not sure what to seed? Add one with a click. Starters only make Iron
+        Jarvis PROPOSE things on its tick — nothing runs without your approval,
+        and the pulse itself stays off until you enable Autonomy above.
+      </p>
+      <div className="mt-3.5 grid gap-2.5 sm:grid-cols-3">
+        {STARTER_GOALS.map((r) => {
+          const isAdded = !!added[r.id] || existingTexts.has(r.text);
+          const isBusy = busyId === r.id;
+          return (
+            <div
+              key={r.id}
+              className="flex flex-col rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-3"
+            >
+              <div className="text-sm font-medium text-zinc-100">{r.title}</div>
+              <p className="mt-1 flex-1 text-sm text-zinc-400">{r.description}</p>
+              <div className="mt-2.5 flex items-center justify-between gap-2">
+                <span className="text-[11px] uppercase tracking-wide text-zinc-600">
+                  {r.category} · P{r.priority} · suggest
+                </span>
+                <button
+                  type="button"
+                  onClick={() => add(r)}
+                  disabled={isAdded || busyId !== null}
+                  title={
+                    isAdded
+                      ? "Already in your standing goals"
+                      : `Add "${r.title}" as a suggest-only goal`
+                  }
+                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-2.5 py-1 text-xs font-medium transition-colors ${
+                    isAdded
+                      ? "border-emerald-500/30 bg-emerald-500/[0.08] text-emerald-300"
+                      : "border-accent/30 bg-accent/[0.08] text-accent-soft hover:bg-accent/[0.14] disabled:opacity-50"
+                  }`}
+                >
+                  {isBusy ? (
+                    <LoaderInline label="Adding…" />
+                  ) : isAdded ? (
+                    <>
+                      <CircleCheck size={13} /> Added ✓
+                    </>
+                  ) : (
+                    <>
+                      <Plus size={13} /> Add
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          );
+        })}
+      </div>
     </Card>
   );
 }

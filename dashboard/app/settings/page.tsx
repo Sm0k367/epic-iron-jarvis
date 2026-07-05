@@ -156,8 +156,7 @@ const FIELDS: FieldDef[] = [
     label: "Autonomy (the pulse)",
     type: "boolean",
     section: "automation",
-    restart: true,
-    hint: "Let Iron Jarvis deliberate on your standing goals and propose (or, within budget, act). Off by default.",
+    hint: "Let Iron Jarvis deliberate on your standing goals and propose (or, within budget, act). Off by default; takes effect immediately.",
   },
   {
     key: "autonomy_level",
@@ -186,8 +185,7 @@ const FIELDS: FieldDef[] = [
     label: "Think every (seconds)",
     type: "number",
     section: "automation",
-    restart: true,
-    hint: "How often the background loop wakes up to deliberate.",
+    hint: "How often the background loop wakes up to deliberate. Applies immediately.",
   },
   {
     key: "autonomy_max_actions_per_day",
@@ -208,16 +206,14 @@ const FIELDS: FieldDef[] = [
     label: "Sentinels (watchers)",
     type: "boolean",
     section: "automation",
-    restart: true,
-    hint: "Always-on watchers that notice changes and add suggestions to the Autonomy backlog (they never act on their own). Off by default.",
+    hint: "Always-on watchers that notice changes and add suggestions to the Autonomy backlog (they never act on their own). Off by default; takes effect immediately.",
   },
   {
     key: "sentinels_tick_seconds",
     label: "Watch every (seconds)",
     type: "number",
     section: "automation",
-    restart: true,
-    hint: "How often the watchers check for changes.",
+    hint: "How often the watchers check for changes. Applies immediately.",
   },
 
   // --- Advanced -----------------------------------------------------------
