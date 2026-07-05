@@ -2,7 +2,7 @@
 
 import { useEffect, useRef } from "react";
 import { Mic, MicOff } from "lucide-react";
-import { useSpeechRecognition } from "@/lib/useSpeechRecognition";
+import { useDictation } from "@/lib/useDictation";
 
 /**
  * Appends a newly dictated chunk to existing text with sane spacing.
@@ -16,10 +16,13 @@ export function appendDictation(prev: string, chunk: string): string {
 }
 
 /**
- * A mic toggle button (Web Speech API) with a clear recording animation.
- * Emits each newly *finalized* chunk via `onTranscript`. Live (interim) words
- * are shown next to the button as a ghost hint — they are not emitted until
- * finalized. Unsupported browsers render a disabled mic with a tooltip.
+ * A mic toggle button with a clear recording animation. Dictation runs on the
+ * browser's Web Speech engine where available, and falls back to daemon
+ * transcription (/voice/transcribe) inside the packaged desktop app. Emits each
+ * newly *finalized* chunk via `onTranscript`. Live (interim) words are shown
+ * next to the button as a ghost hint — they are not emitted until finalized.
+ * When no engine or backend is available, renders a disabled mic whose tooltip
+ * says exactly what to connect.
  */
 export function VoiceInput({
   onTranscript,
@@ -30,8 +33,18 @@ export function VoiceInput({
   size?: "sm" | "md";
   className?: string;
 }) {
-  const { supported, listening, transcript, interim, error, start, stop, reset } =
-    useSpeechRecognition();
+  const {
+    supported,
+    reason,
+    listening,
+    processing,
+    transcript,
+    interim,
+    error,
+    start,
+    stop,
+    reset,
+  } = useDictation();
   const lastLen = useRef(0);
 
   // Emit only the suffix that became final since we last emitted.
@@ -62,8 +75,8 @@ export function VoiceInput({
       <button
         type="button"
         disabled
-        title="Voice input needs Chrome/Edge"
-        aria-label="Voice input unsupported"
+        title={reason || "Voice input isn't available here yet"}
+        aria-label="Voice input unavailable"
         className={`group relative grid ${dim} shrink-0 cursor-not-allowed place-items-center rounded-xl border border-white/[0.06] bg-white/[0.02] text-zinc-600 ${className}`}
       >
         <MicOff size={icon} />
@@ -92,16 +105,18 @@ export function VoiceInput({
           </>
         )}
         <span className="relative z-10">
-          {listening ? <Mic size={icon} /> : <Mic size={icon} />}
+          <Mic size={icon} />
         </span>
       </button>
 
-      {(listening || interim || error) && (
+      {(listening || processing || interim || error) && (
         <span className="min-w-0 max-w-[16rem] truncate text-xs">
           {error ? (
             <span className="text-rose-300">{error}</span>
           ) : interim ? (
             <span className="text-zinc-500 italic">{interim}</span>
+          ) : processing ? (
+            <span className="text-accent-soft/80">transcribing…</span>
           ) : (
             <span className="text-rose-300/80">listening…</span>
           )}

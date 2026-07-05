@@ -41,12 +41,16 @@ import {
   type ReactNode,
 } from "react";
 import {
+  AudioLines,
   Bot,
   Check,
   Copy,
+  FolderKanban,
   History,
   Loader2,
   MessageSquare,
+  Mic,
+  MicOff,
   Paperclip,
   Plus,
   RefreshCw,
@@ -56,6 +60,8 @@ import {
   Square,
   Trash2,
   User,
+  Volume2,
+  VolumeX,
   Wrench,
   X,
 } from "lucide-react";
@@ -65,6 +71,10 @@ import { get, post, put, del, ApiError } from "@/lib/api";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
 import { useEvents } from "@/lib/useEvents";
+import { useDaemon } from "@/lib/daemon";
+import { useDictation } from "@/lib/useDictation";
+import { useTTS } from "@/lib/useTTS";
+import { appendDictation } from "@/components/VoiceInput";
 import { Card, Empty, ErrorNote, LoaderInline, OfflineHint } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
@@ -538,6 +548,24 @@ export default function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false); // mobile-only toggle
 
   const { events } = useEvents(150);
+  // Context spine: which project this conversation is happening in (new
+  // threads are tagged with it server-side).
+  const { health } = useDaemon();
+  const activeProject = health?.active_project ?? null;
+
+  // ---- Voice. ONE dictation engine for both the composer mic and hands-free
+  // Voice Chat (two instances would fight over the mic / recognition service).
+  // Replies are spoken through the shared TTS preference (same toggle as the
+  // session page). Voice Chat = listen → auto-send on pause → speak the reply
+  // (mic held while speaking, so it never hears itself) → listen again.
+  const dictation = useDictation();
+  const tts = useTTS();
+  const [voiceMode, setVoiceMode] = useState(false);
+  // Chars of dictation.transcript already flushed into the composer.
+  const dictEmittedRef = useRef(0);
+  // Voice Chat only auto-sends text that CAME from dictation — typing while
+  // voice chat is on must never fire a surprise send.
+  const inputFromVoiceRef = useRef(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -1024,6 +1052,7 @@ export default function ChatPage() {
         { role: "assistant", content },
       ];
       setMessages(full);
+      tts.speak(content); // no-op unless voice replies are on
       queueSave(full); // agent turns are conversations worth keeping too
       awaitingIdRef.current = null;
       setAwaitingId(null);
@@ -1067,6 +1096,83 @@ export default function ChatPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [awaitingId]);
 
+  // ------------------------------------------------------------------- voice
+
+  // Flush each newly-FINALIZED dictation chunk into the composer.
+  useEffect(() => {
+    if (dictation.transcript.length > dictEmittedRef.current) {
+      const delta = dictation.transcript.slice(dictEmittedRef.current);
+      dictEmittedRef.current = dictation.transcript.length;
+      inputFromVoiceRef.current = true;
+      setInput((p) => appendDictation(p, delta));
+    }
+  }, [dictation.transcript]);
+
+  /** Composer mic: plain dictation into the input (works in any mode). */
+  function micToggle() {
+    if (!dictation.supported) return;
+    if (dictation.listening) {
+      dictation.stop();
+      if (voiceMode) setVoiceMode(false); // the mic is the master off-switch
+    } else {
+      dictation.reset();
+      dictEmittedRef.current = 0;
+      dictation.start();
+    }
+  }
+
+  /** Hands-free Voice Chat on/off. Entering turns spoken replies on (that's
+   *  the point); leaving stops the mic but keeps the TTS preference. */
+  function toggleVoiceMode() {
+    if (voiceMode) {
+      setVoiceMode(false);
+      dictation.stop();
+      return;
+    }
+    if (!dictation.supported) return;
+    tts.enable();
+    setVoiceMode(true); // the hold/resume effect below starts the mic
+  }
+
+  // Voice Chat mic scheduling: hold the mic while a reply is being generated
+  // or spoken (so it never transcribes Iron Jarvis's own voice), listen
+  // otherwise. Also (re)starts the mic on entering voice chat.
+  useEffect(() => {
+    if (!voiceMode) return;
+    if (busy || tts.speaking) {
+      dictation.stop();
+    } else {
+      dictation.reset();
+      dictEmittedRef.current = 0;
+      dictation.start();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceMode, busy, tts.speaking]);
+
+  // Voice Chat auto-send: once dictated text settles (no interim words, no
+  // clip being transcribed), send it. Web Speech finalizes eagerly, so give
+  // the speaker a moment to continue; the server engine already waited out
+  // 1.4s of silence before finalizing, so send almost immediately.
+  useEffect(() => {
+    if (!voiceMode || busy || tts.speaking) return;
+    if (!inputFromVoiceRef.current) return;
+    const text = input.trim();
+    if (!text) return;
+    if (dictation.interim || dictation.processing || dictation.error) return;
+    const delay = dictation.engine === "server" ? 350 : 1500;
+    const timer = setTimeout(() => send(input), delay);
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    voiceMode,
+    input,
+    busy,
+    tts.speaking,
+    dictation.interim,
+    dictation.processing,
+    dictation.error,
+  ]);
+
   // ------------------------------------------------------------------- sending
 
   /**
@@ -1096,15 +1202,17 @@ export default function ChatPage() {
       const res = await post<ChatResponse>("/chat", body);
       if (chatGenRef.current !== gen) return; // "New chat" happened mid-flight
       const toolsUsed = (res.tools_used ?? []).filter((t) => Boolean(t));
+      const reply = (res.reply ?? "").trim() || "(no response)";
       const full: ChatMessage[] = [
         ...history,
         {
           role: "assistant",
-          content: (res.reply ?? "").trim() || "(no response)",
+          content: reply,
           ...(toolsUsed.length ? { toolsUsed } : {}),
         },
       ];
       setMessages(full);
+      tts.speak(reply); // no-op unless voice replies are on
       queueSave(full); // the turn is complete — persist it
     } catch (e) {
       if (chatGenRef.current !== gen) return;
@@ -1211,6 +1319,7 @@ export default function ChatPage() {
   // Cancel is best-effort — even if it fails server-side we stop waiting locally.
   function stop() {
     if (!awaitingId) return;
+    tts.cancel(); // stop reading a reply the user just cut off
     post(`/sessions/${awaitingId}/cancel`).catch(() => {});
     const full: ChatMessage[] = [
       ...messagesRef.current,
@@ -1295,6 +1404,54 @@ export default function ChatPage() {
           subtitle="Talk to Iron Jarvis. Chat mode answers directly in seconds; Agent mode does real work with tools."
           actions={
             <div className="flex flex-wrap items-center gap-2">
+              {/* Context spine: the project this conversation is tagged into. */}
+              {activeProject && (
+                <span
+                  title={`Working in ${activeProject.name} — new chats are tagged to this project. Switch it in the sidebar.`}
+                  className="inline-flex max-w-[12rem] items-center gap-1.5 rounded-xl border border-accent/25 bg-accent/[0.07] px-2.5 py-1.5 text-[12px] font-medium text-accent-soft"
+                >
+                  <FolderKanban size={12} className="shrink-0" />
+                  <span className="truncate">{activeProject.name}</span>
+                </span>
+              )}
+              {/* Voice: hands-free Voice Chat + spoken-replies toggle. */}
+              <button
+                type="button"
+                onClick={toggleVoiceMode}
+                disabled={!dictation.supported}
+                aria-pressed={voiceMode}
+                title={
+                  voiceMode
+                    ? "End voice chat"
+                    : dictation.supported
+                      ? "Voice chat — speak, hear replies, hands-free"
+                      : dictation.reason || "Voice isn't available here yet"
+                }
+                className={`inline-flex items-center gap-1.5 rounded-xl border px-3 py-1.5 text-[13px] font-medium transition-all disabled:cursor-not-allowed disabled:opacity-50 ${
+                  voiceMode
+                    ? "border-rose-500/50 bg-rose-500/15 text-rose-300 shadow-[0_0_18px_-4px_rgba(244,63,94,0.7)]"
+                    : "border-white/10 bg-white/[0.02] text-zinc-400 hover:border-accent/50 hover:text-accent-soft"
+                }`}
+              >
+                <AudioLines size={14} /> {voiceMode ? "Voice on" : "Voice"}
+              </button>
+              {tts.supported && (
+                <button
+                  type="button"
+                  onClick={tts.toggle}
+                  aria-pressed={tts.enabled}
+                  title={
+                    tts.enabled
+                      ? "Spoken replies on — click to mute"
+                      : "Read replies aloud"
+                  }
+                  className={`btn-ghost px-2.5 py-1.5 text-[13px] ${
+                    tts.enabled ? "text-accent-soft" : ""
+                  }`}
+                >
+                  {tts.enabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
+                </button>
+              )}
               {/* Mode toggle: fast direct chat vs. the tool-using agent session. */}
               <div
                 role="group"
@@ -1695,6 +1852,52 @@ export default function ChatPage() {
                 </div>
               )}
 
+              {/* Voice status strip — live mic/speech feedback for both the
+                  composer mic and hands-free Voice Chat. */}
+              {(voiceMode ||
+                dictation.listening ||
+                dictation.processing ||
+                dictation.error) && (
+                <div className="flex items-center gap-2 border-t hairline px-3 py-2 text-xs">
+                  <span
+                    className={`h-2 w-2 shrink-0 rounded-full ${
+                      dictation.listening
+                        ? "animate-pulse bg-rose-400 shadow-[0_0_8px_2px_rgba(244,63,94,0.5)]"
+                        : "bg-zinc-600"
+                    }`}
+                  />
+                  {dictation.error ? (
+                    <span className="truncate text-rose-300">{dictation.error}</span>
+                  ) : tts.speaking ? (
+                    <span className="text-accent-soft/80">
+                      speaking — mic resumes when done
+                    </span>
+                  ) : dictation.processing ? (
+                    <span className="text-accent-soft/80">transcribing…</span>
+                  ) : dictation.interim ? (
+                    <span className="truncate italic text-zinc-400">
+                      {dictation.interim}
+                    </span>
+                  ) : dictation.listening ? (
+                    <span className="text-zinc-400">
+                      listening…{voiceMode ? " pause to send" : ""}
+                    </span>
+                  ) : busy ? (
+                    <span className="text-zinc-500">thinking…</span>
+                  ) : (
+                    <span className="text-zinc-500">voice chat on</span>
+                  )}
+                  {voiceMode && (
+                    <button
+                      type="button"
+                      onClick={toggleVoiceMode}
+                      className="ml-auto shrink-0 text-zinc-500 transition-colors hover:text-zinc-300"
+                    >
+                      end voice chat
+                    </button>
+                  )}
+                </div>
+              )}
               {/* Composer */}
               <div className="relative flex items-end gap-2 border-t hairline p-3">
                 {/* "/" skill picker — floats above the composer */}
@@ -1887,10 +2090,37 @@ export default function ChatPage() {
                     )}
                   </div>
                 )}
+                {/* Mic — dictate into the composer (daemon-transcribed in the
+                    desktop app, Web Speech in a browser). */}
+                <button
+                  type="button"
+                  onClick={micToggle}
+                  disabled={!dictation.supported}
+                  aria-pressed={dictation.listening}
+                  aria-label={
+                    dictation.listening ? "Stop dictation" : "Start dictation"
+                  }
+                  title={
+                    dictation.supported
+                      ? dictation.listening
+                        ? "Stop dictation"
+                        : "Dictate your message"
+                      : dictation.reason || "Voice input isn't available here yet"
+                  }
+                  className={`relative h-[2.75rem] shrink-0 px-3 py-0 ${
+                    dictation.listening ? "btn-ghost text-rose-300" : "btn-ghost"
+                  } disabled:cursor-not-allowed disabled:opacity-50`}
+                >
+                  {dictation.listening && (
+                    <span className="pointer-events-none absolute -right-0.5 -top-0.5 h-2 w-2 animate-pulse rounded-full bg-rose-400 shadow-[0_0_8px_2px_rgba(244,63,94,0.6)]" />
+                  )}
+                  {dictation.supported ? <Mic size={15} /> : <MicOff size={15} />}
+                </button>
                 <textarea
                   ref={inputRef}
                   value={input}
                   onChange={(e) => {
+                    inputFromVoiceRef.current = false; // typed — never auto-send
                     setInput(e.target.value);
                     setSlashDismissed(false); // editing reopens the "/" dropdown
                   }}
