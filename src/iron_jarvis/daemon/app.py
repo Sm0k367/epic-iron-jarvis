@@ -119,6 +119,11 @@ class ChatBody(BaseModel):
     persona: str = ""
     #: Workspace/absolute paths of uploaded files to ground this turn on.
     attachments: list[str] = []
+    #: A skill to invoke this turn (the "/" picker) — instructions injected.
+    skill: str = ""
+    #: Tools the user ARMED via the "+" menu (registry names, max 6). When set,
+    #: the chat runs a small tool loop (up to 4 rounds) with JUST these tools.
+    tools: list[str] = []
 
 
 class ProjectCreate(BaseModel):
@@ -1223,6 +1228,17 @@ def create_app(project_root: str | None = None) -> FastAPI:
         if attach_block:
             system += "\n\n# Attachments (provided by the user this turn)" + attach_block
 
+        # "/" skill invocation: the chosen skill's playbook rides the system
+        # prompt (provider-agnostic, same as the terminal assist).
+        if (body.skill or "").strip():
+            sk = platform.skills.get(body.skill.strip())
+            if sk is None:
+                raise HTTPException(status_code=404, detail=f"no such skill: {body.skill}")
+            system += (
+                f"\n\n# Skill invoked by the user: {sk.name}\n"
+                "FOLLOW this playbook for this request.\n" + sk.instructions[:8000]
+            )
+
         # Full multi-turn history (bounded), images ride on the LAST user turn.
         msgs: list[LLMMessage] = []
         for m in body.messages[-30:]:
@@ -1234,15 +1250,55 @@ def create_app(project_root: str | None = None) -> FastAPI:
                     m.images = images
                     break
 
-        try:
-            route = await platform.router.complete(
-                provider=body.provider or None,
-                model=body.model or None,
-                system=system,
-                messages=msgs,
-                tools=[],
-                task_class="chat",
+        # "+" armed tools: a SMALL tool loop (max 4 rounds) with exactly the
+        # tools the user selected — auto-allowed because arming them WAS the
+        # user's explicit consent for this conversation.
+        armed = [t for t in (body.tools or [])[:6] if platform.registry.get(t)]
+        tool_specs = platform.registry.specs(armed) if armed else []
+        tools_used: list[str] = []
+        if armed:
+            from ..tools.base import ToolContext
+
+            scratch = platform.config.home / "uploads"
+            scratch.mkdir(parents=True, exist_ok=True)
+            ctx = ToolContext(
+                workspace=scratch, session_id="chat", agent_run_id="chat",
+                config=platform.config, event_bus=platform.event_bus,
+                engine=platform.engine,
             )
+            system += (
+                "\n\n# Tools\nThe user armed these tools for this chat: "
+                + ", ".join(armed)
+                + ". Use them when they help; answer directly when they don't."
+            )
+        overrides = {t: "allow" for t in armed}
+        try:
+            for _round in range(4):
+                route = await platform.router.complete(
+                    provider=body.provider or None,
+                    model=body.model or None,
+                    system=system,
+                    messages=msgs,
+                    tools=tool_specs,
+                    task_class="chat",
+                )
+                calls = route.response.tool_calls or []
+                if not calls or not armed:
+                    break
+                msgs.append(LLMMessage(role="assistant",
+                                       content=route.response.text,
+                                       tool_calls=calls))
+                for tc in calls:
+                    tools_used.append(tc.name)
+                    try:
+                        result = await platform.registry.invoke(
+                            tc.name, tc.arguments, ctx, platform.permissions, overrides
+                        )
+                        content = result.output if result.ok else (result.error or "error")
+                    except Exception as exc:  # noqa: BLE001
+                        content = f"{type(exc).__name__}: {exc}"
+                    msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
+                                           name=tc.name, content=str(content)[:12000]))
         except Exception as exc:  # noqa: BLE001 — honest, human error
             raise HTTPException(status_code=502, detail=str(exc))
         return {
@@ -1251,6 +1307,8 @@ def create_app(project_root: str | None = None) -> FastAPI:
             "model": route.model,
             "attached": len(body.attachments or []),
             "images": len(images),
+            "skill": (body.skill or "").strip() or None,
+            "tools_used": tools_used,
         }
 
     # --- Projects (§spine) — the shared context every surface tags into ----

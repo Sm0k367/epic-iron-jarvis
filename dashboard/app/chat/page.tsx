@@ -6,6 +6,9 @@
 // history is sent on every turn and the reply comes back in seconds. Personas
 // and file attachments ride along (text is extracted server-side; images go to
 // vision). No session machinery at all — multi-turn is just the local array.
+// Chat-mode extras: a "+" menu arms up to 6 registry tools (sent as `tools`;
+// the reply may report `tools_used`) and typing "/" picks a skill (sent as
+// `skill`) — both persist across turns and clear on New chat / thread switch.
 //
 // AGENT: the original session-based flow, preserved verbatim. The message opens
 // (or continues) a real Iron Jarvis session that can use tools. Sending is
@@ -47,6 +50,7 @@ import {
   Paperclip,
   Plus,
   RefreshCw,
+  Search,
   Send,
   Sparkles,
   Square,
@@ -72,6 +76,8 @@ interface ChatMessage {
   content: string;
   /** Display names of files attached to this (user) message — footer chips. */
   attachmentNames?: string[];
+  /** Registry tools the reply actually ran (assistant messages) — footer line. */
+  toolsUsed?: string[];
 }
 
 /** What POST /chat expects. */
@@ -85,15 +91,32 @@ interface ChatRequestBody {
   model?: string;
   persona?: string;
   attachments?: string[]; // uploaded document paths
+  skill?: string; // playbook for the reply (omitted / "" = none)
+  tools?: string[]; // armed registry tools (max 6) — the chat runs a tool loop
 }
 interface ChatResponse {
   reply: string;
   provider?: string;
   model?: string;
   images?: string[];
+  skill?: string;
+  tools_used?: string[];
 }
 
 interface PersonaOption {
+  name: string;
+  description: string;
+}
+
+/** One row from GET /skills. */
+interface SkillOption {
+  name: string;
+  description: string;
+  source?: string;
+}
+
+/** One row from GET /tools — the registry sends more fields; we need these two. */
+interface ToolOption {
   name: string;
   description: string;
 }
@@ -144,6 +167,11 @@ interface UploadedFile {
 // Attachment limits: keep uploads snappy and the /chat context sane.
 const MAX_ATTACHMENTS = 4;
 const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
+
+// Tool-loop limits: /chat accepts at most 6 armed tools; the registry is big,
+// so the "+" menu renders at most this many rows (search narrows the rest).
+const MAX_TOOLS = 6;
+const TOOL_LIST_CAP = 100;
 
 // Persona persistence (chat mode only).
 const PERSONA_KEY = "ij_chat_persona";
@@ -488,6 +516,20 @@ export default function ChatPage() {
   const [uploading, setUploading] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [input, setInput] = useState("");
+  // "+" TOOLS MENU (chat mode): armed registry tool names — sent as `tools` on
+  // every /chat turn and kept across turns until "New chat" / a thread switch.
+  const [selectedTools, setSelectedTools] = useState<string[]>([]);
+  const [toolsOpen, setToolsOpen] = useState(false);
+  const [toolQuery, setToolQuery] = useState("");
+  const [toolCatalog, setToolCatalog] = useState<ToolOption[] | null>(null);
+  const [toolsError, setToolsError] = useState<string | null>(null);
+  // "/" SKILL PICKER (chat mode): the chosen skill rides along as `skill` on
+  // every turn until its chip is cleared. `slashDismissed` = Esc closed the
+  // dropdown for the current "/…" text (any edit reopens it).
+  const [skills, setSkills] = useState<SkillOption[] | null>(null);
+  const [activeSkill, setActiveSkill] = useState("");
+  const [skillIndex, setSkillIndex] = useState(0);
+  const [slashDismissed, setSlashDismissed] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [offline, setOffline] = useState(false);
   // Threads sidebar: the saved-conversation list + which one is loaded.
@@ -500,6 +542,12 @@ export default function ChatPage() {
   const bottomRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const fileRef = useRef<HTMLInputElement>(null);
+  // "+" popover container — outside-click detection needs the DOM node.
+  const toolsPopRef = useRef<HTMLDivElement>(null);
+  // One-shot fetch guards for the /tools and /skills catalogs (cached in state;
+  // reset on failure so reopening the affordance retries).
+  const toolsFetchedRef = useRef(false);
+  const skillsFetchedRef = useRef(false);
   // Latest events, readable synchronously inside send() without re-subscribing.
   const eventsRef = useRef<IJEvent[]>(events);
   eventsRef.current = events;
@@ -669,6 +717,11 @@ export default function ChatPage() {
     setChatBusy(false);
     setSessionId(null);
     setAttachments([]);
+    setSelectedTools([]); // armed tools are per-conversation
+    setToolsOpen(false);
+    setToolQuery("");
+    setActiveSkill(""); // so is the active skill
+    setSlashDismissed(false);
     setError(null);
     setOffline(false);
     sinceRef.current = null;
@@ -810,6 +863,104 @@ export default function ChatPage() {
     };
   }, []);
 
+  // ------------------------------------------------- skills & tools (chat mode)
+
+  // "/" skill dropdown state, derived from the composer text.
+  const slashActive =
+    mode === "chat" && !busy && input.startsWith("/") && !slashDismissed;
+  const slashQuery = slashActive ? input.slice(1).trim().toLowerCase() : "";
+
+  const skillMatches = useMemo(() => {
+    if (!slashActive) return [] as SkillOption[];
+    const list = skills ?? [];
+    const filtered = slashQuery
+      ? list.filter(
+          (s) =>
+            s.name.toLowerCase().includes(slashQuery) ||
+            (s.description || "").toLowerCase().includes(slashQuery),
+        )
+      : list;
+    return filtered.slice(0, 8);
+  }, [slashActive, slashQuery, skills]);
+
+  const toolMatches = useMemo(() => {
+    const list = toolCatalog ?? [];
+    const q = toolQuery.trim().toLowerCase();
+    if (!q) return list;
+    return list.filter(
+      (t) =>
+        t.name.toLowerCase().includes(q) ||
+        (t.description || "").toLowerCase().includes(q),
+    );
+  }, [toolCatalog, toolQuery]);
+
+  // Lazily fetch + cache the skill catalog the first time "/" opens the picker.
+  useEffect(() => {
+    if (!slashActive || skillsFetchedRef.current) return;
+    skillsFetchedRef.current = true;
+    get<{ skills: SkillOption[] }>("/skills")
+      .then((d) => setSkills(d.skills ?? []))
+      .catch(() => {
+        skillsFetchedRef.current = false; // a later "/" retries
+        setSkills([]);
+      });
+  }, [slashActive]);
+
+  // Lazily fetch + cache the tool registry the first time the "+" menu opens.
+  useEffect(() => {
+    if (!toolsOpen || toolsFetchedRef.current) return;
+    toolsFetchedRef.current = true;
+    setToolsError(null);
+    get<{ tools: ToolOption[] }>("/tools")
+      .then((d) => setToolCatalog(d.tools ?? []))
+      .catch((e) => {
+        toolsFetchedRef.current = false; // reopening retries
+        setToolsError(e instanceof ApiError ? e.message : String(e));
+      });
+  }, [toolsOpen]);
+
+  // Keep the highlighted skill row pinned to the top as the query changes.
+  useEffect(() => {
+    setSkillIndex(0);
+  }, [slashQuery, slashActive]);
+
+  // Close the "+" popover on any outside click.
+  useEffect(() => {
+    if (!toolsOpen) return;
+    const onDown = (e: MouseEvent) => {
+      if (!toolsPopRef.current?.contains(e.target as Node)) setToolsOpen(false);
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [toolsOpen]);
+
+  // Agent mode hides both affordances — never leave the popover floating open.
+  useEffect(() => {
+    if (mode !== "chat") setToolsOpen(false);
+  }, [mode]);
+
+  function toggleTool(name: string) {
+    setSelectedTools((prev) =>
+      prev.includes(name)
+        ? prev.filter((n) => n !== name)
+        : prev.length >= MAX_TOOLS
+          ? prev // at the cap — the row is disabled anyway
+          : [...prev, name],
+    );
+  }
+
+  function disarmTool(name: string) {
+    setSelectedTools((prev) => prev.filter((n) => n !== name));
+  }
+
+  /** Select a skill from the "/" dropdown: chip on, "/query" text consumed. */
+  function pickSkill(name: string) {
+    setActiveSkill(name);
+    setInput("");
+    setSlashDismissed(false);
+    inputRef.current?.focus();
+  }
+
   // ---------------------------------------------------------- agent-mode machinery
 
   // Human-readable steps for the current agent turn, newest-first. Only events
@@ -936,12 +1087,20 @@ export default function ChatPage() {
         ...(model ? { model } : {}),
         ...(personaValue ? { persona: personaValue } : {}),
         ...(atts.length ? { attachments: atts.map((a) => a.path) } : {}),
+        // The reply's playbook + armed tool loop (both sticky across turns).
+        ...(activeSkill ? { skill: activeSkill } : {}),
+        ...(selectedTools.length ? { tools: selectedTools.slice(0, MAX_TOOLS) } : {}),
       };
       const res = await post<ChatResponse>("/chat", body);
       if (chatGenRef.current !== gen) return; // "New chat" happened mid-flight
+      const toolsUsed = (res.tools_used ?? []).filter((t) => Boolean(t));
       const full: ChatMessage[] = [
         ...history,
-        { role: "assistant", content: (res.reply ?? "").trim() || "(no response)" },
+        {
+          role: "assistant",
+          content: (res.reply ?? "").trim() || "(no response)",
+          ...(toolsUsed.length ? { toolsUsed } : {}),
+        },
       ];
       setMessages(full);
       queueSave(full); // the turn is complete — persist it
@@ -1069,6 +1228,11 @@ export default function ChatPage() {
     setAwaitingId(null); // also tears down any polling interval
     setChatBusy(false);
     setAttachments([]);
+    setSelectedTools([]);
+    setToolsOpen(false);
+    setToolQuery("");
+    setActiveSkill("");
+    setSlashDismissed(false);
     setInput("");
     setError(null);
     setOffline(false);
@@ -1084,6 +1248,31 @@ export default function ChatPage() {
   }
 
   function onKeyDown(e: React.KeyboardEvent<HTMLTextAreaElement>) {
+    // While the "/" skill dropdown is open it owns the navigation keys.
+    if (slashActive) {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSkillIndex((i) => Math.min(i + 1, Math.max(skillMatches.length - 1, 0)));
+        return;
+      }
+      if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSkillIndex((i) => Math.max(i - 1, 0));
+        return;
+      }
+      if (e.key === "Escape") {
+        e.preventDefault();
+        setSlashDismissed(true);
+        return;
+      }
+      // Enter picks the highlighted skill; with no match it falls through and
+      // sends the literal "/…" text like any other message.
+      if (e.key === "Enter" && !e.shiftKey && skillMatches.length > 0) {
+        e.preventDefault();
+        pickSkill(skillMatches[Math.min(skillIndex, skillMatches.length - 1)].name);
+        return;
+      }
+    }
     // Enter sends; Shift+Enter inserts a newline.
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
@@ -1186,7 +1375,12 @@ export default function ChatPage() {
               </select>
               <button
                 onClick={newChat}
-                disabled={!started && attachments.length === 0}
+                disabled={
+                  !started &&
+                  attachments.length === 0 &&
+                  selectedTools.length === 0 &&
+                  activeSkill === ""
+                }
                 className="btn-ghost py-1.5 text-[13px]"
               >
                 <Plus size={14} /> New chat
@@ -1367,6 +1561,15 @@ export default function ChatPage() {
                           <Bubble role="assistant">
                             <Markdown content={m.content} />
                           </Bubble>
+                          {/* Tools the reply's tool loop actually ran */}
+                          {m.toolsUsed && m.toolsUsed.length > 0 && (
+                            <div className="ml-11 mt-1 flex min-w-0 items-center gap-1.5 text-[11px] text-zinc-500">
+                              <Wrench size={10} className="shrink-0 text-accent-soft/70" />
+                              <span className="truncate">
+                                used: {m.toolsUsed.join(", ")}
+                              </span>
+                            </div>
+                          )}
                           <div className="ml-11 mt-1 flex items-center gap-0.5 opacity-0 transition-opacity focus-within:opacity-100 group-hover/msg:opacity-100">
                             <CopyIconButton text={m.content} title="Copy message" />
                             {canRegen && (
@@ -1425,9 +1628,50 @@ export default function ChatPage() {
                 </div>
               )}
 
-              {/* Attachment chips — queued for the next message */}
-              {attachments.length > 0 && (
+              {/* Chips queued for the next message — active skill + armed tools
+                  (chat mode) share the row with attachment chips. */}
+              {(attachments.length > 0 ||
+                (mode === "chat" &&
+                  (activeSkill !== "" || selectedTools.length > 0))) && (
                 <div className="flex flex-wrap items-center gap-2 border-t hairline px-3 py-2.5">
+                  {mode === "chat" && activeSkill !== "" && (
+                    <span className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300">
+                      <Sparkles size={11} className="shrink-0 text-accent-soft" />
+                      <span className="max-w-[14rem] truncate font-mono">
+                        {activeSkill}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => setActiveSkill("")}
+                        aria-label={`Clear skill ${activeSkill}`}
+                        title="Clear skill"
+                        className="text-zinc-500 transition-colors hover:text-rose-300"
+                      >
+                        <X size={11} />
+                      </button>
+                    </span>
+                  )}
+                  {mode === "chat" &&
+                    selectedTools.map((name) => (
+                      <span
+                        key={name}
+                        className="inline-flex items-center gap-1.5 rounded-full border border-accent/25 bg-accent/[0.06] px-2.5 py-1 text-[11px] text-zinc-300"
+                      >
+                        <Wrench size={11} className="shrink-0 text-accent-soft" />
+                        <span className="max-w-[14rem] truncate font-mono">
+                          {name}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => disarmTool(name)}
+                          aria-label={`Disarm ${name}`}
+                          title="Disarm tool"
+                          className="text-zinc-500 transition-colors hover:text-rose-300"
+                        >
+                          <X size={11} />
+                        </button>
+                      </span>
+                    ))}
                   {attachments.map((a, i) => (
                     <span
                       key={`${a.path}-${i}`}
@@ -1450,7 +1694,55 @@ export default function ChatPage() {
               )}
 
               {/* Composer */}
-              <div className="flex items-end gap-2 border-t hairline p-3">
+              <div className="relative flex items-end gap-2 border-t hairline p-3">
+                {/* "/" skill picker — floats above the composer */}
+                {slashActive && (
+                  <div className="absolute bottom-full left-3 right-3 z-20 mb-2 overflow-hidden rounded-xl border border-white/10 bg-zinc-900 shadow-lg shadow-black/40">
+                    {skills === null ? (
+                      <p className="px-3 py-2.5 text-xs text-zinc-500">
+                        Loading skills…
+                      </p>
+                    ) : skillMatches.length === 0 ? (
+                      <p className="px-3 py-2.5 text-xs text-zinc-500">
+                        no matching skill
+                      </p>
+                    ) : (
+                      <div
+                        role="listbox"
+                        aria-label="Skills"
+                        className="max-h-72 overflow-y-auto p-1"
+                      >
+                        {skillMatches.map((s, i) => (
+                          <button
+                            key={s.name}
+                            type="button"
+                            role="option"
+                            aria-selected={i === skillIndex}
+                            onClick={() => pickSkill(s.name)}
+                            onMouseEnter={() => setSkillIndex(i)}
+                            title={s.description}
+                            className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left transition-colors ${
+                              i === skillIndex
+                                ? "bg-accent/[0.12] text-accent-soft"
+                                : "text-zinc-300"
+                            }`}
+                          >
+                            <Sparkles
+                              size={12}
+                              className="shrink-0 text-accent-soft/70"
+                            />
+                            <span className="shrink-0 font-mono text-[12px]">
+                              {s.name}
+                            </span>
+                            <span className="truncate text-[11px] text-zinc-500">
+                              {s.description}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <input
                   ref={fileRef}
                   type="file"
@@ -1468,10 +1760,130 @@ export default function ChatPage() {
                 >
                   {uploading ? <LoaderInline /> : <Paperclip size={15} />}
                 </button>
+                {/* "+" tools menu — arm registry tools for the /chat tool loop */}
+                {mode === "chat" && (
+                  <div ref={toolsPopRef} className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setToolsOpen((v) => !v)}
+                      aria-expanded={toolsOpen}
+                      aria-haspopup="true"
+                      aria-label="Arm tools"
+                      title={`Arm tools for this chat (up to ${MAX_TOOLS})`}
+                      className={`btn-ghost h-[2.75rem] px-3 py-0 ${
+                        toolsOpen || selectedTools.length > 0
+                          ? "text-accent-soft"
+                          : ""
+                      }`}
+                    >
+                      <Plus size={16} />
+                    </button>
+                    {toolsOpen && (
+                      <div className="absolute bottom-full left-0 z-20 mb-2 flex max-h-72 w-[min(22rem,calc(100vw-6rem))] flex-col overflow-hidden rounded-xl border border-white/10 bg-zinc-900 shadow-lg shadow-black/40">
+                        <div className="shrink-0 border-b hairline p-2">
+                          <div className="relative">
+                            <Search
+                              size={12}
+                              className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500"
+                            />
+                            <input
+                              autoFocus
+                              value={toolQuery}
+                              onChange={(e) => setToolQuery(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Escape") {
+                                  e.preventDefault();
+                                  setToolsOpen(false);
+                                  inputRef.current?.focus();
+                                }
+                              }}
+                              placeholder="Search tools…"
+                              aria-label="Search tools"
+                              className="field w-full py-1.5 pl-8 text-[12px]"
+                            />
+                          </div>
+                          <p className="mt-1.5 px-0.5 text-[10px] text-zinc-500">
+                            up to {MAX_TOOLS} tools · {selectedTools.length} armed
+                          </p>
+                        </div>
+                        <div className="min-h-0 flex-1 overflow-y-auto p-1">
+                          {toolsError ? (
+                            <p className="px-2.5 py-2 text-[11px] text-rose-300">
+                              {toolsError}
+                            </p>
+                          ) : toolCatalog === null ? (
+                            <div className="px-2.5 py-2">
+                              <LoaderInline />
+                            </div>
+                          ) : toolMatches.length === 0 ? (
+                            <p className="px-2.5 py-2 text-[11px] text-zinc-500">
+                              No tools match.
+                            </p>
+                          ) : (
+                            <>
+                              {toolMatches.slice(0, TOOL_LIST_CAP).map((t) => {
+                                const checked = selectedTools.includes(t.name);
+                                const atCap =
+                                  !checked && selectedTools.length >= MAX_TOOLS;
+                                return (
+                                  <button
+                                    key={t.name}
+                                    type="button"
+                                    role="checkbox"
+                                    aria-checked={checked}
+                                    disabled={atCap}
+                                    onClick={() => toggleTool(t.name)}
+                                    title={t.description}
+                                    className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
+                                      atCap
+                                        ? "opacity-40"
+                                        : "hover:bg-white/[0.05]"
+                                    }`}
+                                  >
+                                    <span
+                                      className={`grid h-3.5 w-3.5 shrink-0 place-items-center rounded border ${
+                                        checked
+                                          ? "border-accent/60 bg-accent/20 text-accent-soft"
+                                          : "border-white/20"
+                                      }`}
+                                    >
+                                      {checked && <Check size={10} />}
+                                    </span>
+                                    <span
+                                      className={`max-w-[45%] shrink-0 truncate font-mono text-[12px] ${
+                                        checked
+                                          ? "text-accent-soft"
+                                          : "text-zinc-200"
+                                      }`}
+                                    >
+                                      {t.name}
+                                    </span>
+                                    <span className="truncate text-[11px] text-zinc-500">
+                                      {t.description}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                              {toolMatches.length > TOOL_LIST_CAP && (
+                                <p className="px-2.5 py-1.5 text-[10px] text-zinc-600">
+                                  {toolMatches.length - TOOL_LIST_CAP} more —
+                                  refine your search
+                                </p>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <textarea
                   ref={inputRef}
                   value={input}
-                  onChange={(e) => setInput(e.target.value)}
+                  onChange={(e) => {
+                    setInput(e.target.value);
+                    setSlashDismissed(false); // editing reopens the "/" dropdown
+                  }}
                   onKeyDown={onKeyDown}
                   disabled={busy}
                   rows={1}
