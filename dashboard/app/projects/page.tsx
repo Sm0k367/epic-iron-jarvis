@@ -15,7 +15,7 @@ import {
   FolderOpen,
   History,
 } from "lucide-react";
-import { api, get, post, ApiError } from "@/lib/api";
+import { api, del, get, post, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
 import type { Project, SessionView } from "@/lib/types";
 import {
@@ -285,6 +285,15 @@ function ProjectCard({
             title={`Archive "${p.name}" — it stops appearing as a workspace but nothing is deleted`}
           />
         )}
+
+        <ConfirmButton
+          onConfirm={() => {
+            void run("delete", () => del(`/projects/${encodeURIComponent(p.id)}`));
+          }}
+          label="Delete"
+          confirmLabel="Delete from app?"
+          title={`Remove "${p.name}" from Iron Jarvis only — your files and folders on this computer are NOT touched`}
+        />
 
         <button
           type="button"

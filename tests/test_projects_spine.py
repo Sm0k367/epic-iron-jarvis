@@ -95,3 +95,24 @@ def test_channel_test_endpoint(tmp_path):
     assert r.status_code == 200
     assert r.json()["ok"] is True
     assert client.post("/comm/channels/ghost/test").status_code == 404
+
+
+def test_delete_project_interface_only(tmp_path):
+    """DELETE removes the project row + untags sessions; disk files untouched."""
+    root = tmp_path / "client-files"
+    root.mkdir()
+    (root / "keep-me.txt").write_text("important")
+    client = _client(tmp_path)
+    pid = client.post("/projects", json={"name": "Del", "root": str(root)}).json()["id"]
+    s = client.post("/sessions", json={"task": "x", "wait": True}).json()
+    assert s["project_id"] == pid
+    r = client.delete(f"/projects/{pid}").json()
+    assert r["deleted"] == pid and r["files_touched"] == 0
+    assert (root / "keep-me.txt").read_text() == "important"  # disk untouched
+    assert client.get("/health").json()["active_project"] is None  # was active
+    listed = client.get("/projects").json()["projects"]
+    assert all(p["id"] != pid for p in listed)
+    # The session's history survives, just untagged.
+    left = client.get("/sessions").json()["sessions"]
+    assert any(x["id"] == s["id"] and x["project_id"] is None for x in left)
+    assert client.delete(f"/projects/{pid}").status_code == 404

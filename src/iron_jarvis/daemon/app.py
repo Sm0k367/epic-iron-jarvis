@@ -1412,6 +1412,32 @@ def create_app(project_root: str | None = None) -> FastAPI:
             _persist_config(["active_project_id"])
         return project.model_dump()
 
+    @app.delete("/projects/{project_id}")
+    def delete_project(project_id: str) -> dict[str, Any]:
+        """Remove a project from Iron Jarvis ONLY — the folder it pointed at
+        and every file on disk are untouched (the root is just a reference).
+        Sessions that were tagged to it keep their history; they simply lose
+        the project association."""
+        from ..core.models import Project
+        from ..core.models import Session as SessionModel
+
+        with session_scope(platform.engine) as db:
+            proj = db.get(Project, project_id)
+            if proj is None:
+                raise HTTPException(status_code=404, detail="no such project")
+            # Untag sessions (history preserved, association dropped).
+            for s in db.exec(
+                select(SessionModel).where(SessionModel.project_id == project_id)
+            ):
+                s.project_id = None
+                db.add(s)
+            db.delete(proj)
+            db.commit()
+        if getattr(platform.config, "active_project_id", None) == project_id:
+            platform.config.active_project_id = None
+            _persist_config(["active_project_id"])
+        return {"deleted": project_id, "files_touched": 0}
+
     @app.post("/projects/{project_id}/activate")
     def activate_project(project_id: str) -> dict[str, Any]:
         from ..core.models import Project
