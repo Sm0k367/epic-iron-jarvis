@@ -218,6 +218,21 @@ BUILTIN_SPECS: dict[str, ConnectionSpec] = {
         ),
         key_secret_name="custom_api_key",
     ),
+    # --- Creative media (NOT an LLM) ------------------------------------------
+    # Pixio powers the pixio_* agent tools + the Creative gallery's publish
+    # button. The secret name is the bare "pixio" the tools already resolve.
+    "pixio": ConnectionSpec(
+        provider="pixio",
+        display_name="Pixio (creative media)",
+        method="api_key",
+        docs_url="https://beta.pixio.myapps.ai",
+        key_help=(
+            "Generate images, video, and audio (the Creative gallery + the "
+            "pixio_* agent tools). Keys look like pxio_live_… — get one at "
+            "beta.pixio.myapps.ai."
+        ),
+        key_secret_name="pixio",
+    ),
     "mock": ConnectionSpec(
         provider="mock",
         display_name="Mock (offline)",

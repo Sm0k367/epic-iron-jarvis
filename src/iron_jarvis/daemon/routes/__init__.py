@@ -11,6 +11,7 @@ from . import (  # noqa: F401
     comm,
     computeruse,
     connections,
+    creative,
     documents,
     fsbrowse,
     knowledge,

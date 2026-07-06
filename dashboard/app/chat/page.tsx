@@ -68,7 +68,7 @@ import {
 } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { get, post, put, del, ApiError } from "@/lib/api";
+import { get, post, put, del, ApiError, API_BASE, ijToken } from "@/lib/api";
 import type { IJEvent, ModelOption, SessionView } from "@/lib/types";
 import { timeAgo } from "@/lib/format";
 import { useEvents } from "@/lib/useEvents";
@@ -460,7 +460,61 @@ const MD_COMPONENTS: Components = {
   ),
   pre: MarkdownPre,
   code: MarkdownCode,
+  img: MarkdownMedia,
 };
+
+/** Media extensions the daemon's /creative/file-by-path endpoint will serve. */
+const MEDIA_EXT_RX =
+  /\.(png|jpe?g|webp|gif|bmp|svg|mp4|webm|mov|m4v|mkv|mp3|wav|ogg|m4a|flac|aac|opus)$/i;
+const VIDEO_EXT_RX = /\.(mp4|webm|mov|m4v|mkv)$/i;
+const AUDIO_EXT_RX = /\.(mp3|wav|ogg|m4a|flac|aac|opus)$/i;
+
+/**
+ * Inline media in replies — the "show me" half of the creative loop. The pixio
+ * tools save generations to LOCAL paths and tell the model to embed them as
+ * markdown images; a browser can't load `C:\…\pixio\out.png` directly, so
+ * local absolute paths are rewritten through the daemon's guarded
+ * /creative/file-by-path (media extensions only; ?token= because <img> can't
+ * send an Authorization header). Video/audio extensions get real players.
+ */
+function MarkdownMedia({ src, alt }: { src?: string | Blob; alt?: string }) {
+  const raw = typeof src === "string" ? src : "";
+  if (!raw) return null;
+  const isLocal = /^([A-Za-z]:[\\/]|\/(?!\/))/.test(raw) || raw.startsWith("file://");
+  let resolved = raw;
+  if (isLocal) {
+    const path = raw.replace(/^file:\/\//, "");
+    if (!MEDIA_EXT_RX.test(path)) {
+      return <code className="text-[12px] text-zinc-400">{raw}</code>;
+    }
+    const token = ijToken();
+    resolved = `${API_BASE}/creative/file-by-path?path=${encodeURIComponent(path)}${
+      token ? `&token=${encodeURIComponent(token)}` : ""
+    }`;
+  }
+  if (VIDEO_EXT_RX.test(raw)) {
+    return (
+      <video
+        src={resolved}
+        controls
+        preload="metadata"
+        className="my-2 max-h-96 w-full max-w-xl rounded-xl border border-white/10"
+      />
+    );
+  }
+  if (AUDIO_EXT_RX.test(raw)) {
+    return <audio src={resolved} controls className="my-2 w-full max-w-xl" />;
+  }
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={resolved}
+      alt={alt || "generated media"}
+      loading="lazy"
+      className="my-2 max-h-96 w-auto max-w-full rounded-xl border border-white/10"
+    />
+  );
+}
 
 const REMARK_PLUGINS = [remarkGfm];
 

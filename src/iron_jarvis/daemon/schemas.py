@@ -169,6 +169,30 @@ class ConnectionKeyBody(BaseModel):
     key: str
 
 
+class CreativePublishBody(BaseModel):
+    """Publish media to Pixio's public CDN → a permanent public url.
+
+    Exactly one source: a gallery ``name`` (artifact), a local ``path``, or a
+    remote ``url`` to mirror. ``endpoint``: 'media' (any media, default) or
+    'images' (images only)."""
+
+    name: str = ""
+    version: int | None = None
+    path: str = ""
+    url: str = ""
+    endpoint: str = "media"
+
+
+class CreativeUploadBody(BaseModel):
+    """Add a media file to the Creative gallery (same b64-JSON wire pattern as
+    UploadBody — no multipart dependency). ``publish=True`` also pushes it to
+    Pixio's CDN and returns the permanent public url."""
+
+    filename: str
+    content_b64: str
+    publish: bool = False
+
+
 class GraphLinkBody(BaseModel):
     """Connect or disconnect two memory-graph nodes (opaque node ids)."""
 

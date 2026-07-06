@@ -40,8 +40,15 @@ from .base import Tool, ToolContext, ToolResult
 #: (method, url, headers, json_body) -> response-ish with
 #: ``.status_code`` / ``.content`` / ``.json()``.
 HttpRequest = Callable[[str, str, dict[str, str], "dict[str, Any] | None"], Any]
+#: (url, headers, blob, filename, mime) -> response-ish — multipart uploads.
+HttpUpload = Callable[[str, "dict[str, str]", bytes, str, str], Any]
 #: () -> Pixio API key (or ``None`` when not configured).
 KeyResolver = Callable[[], "str | None"]
+#: (artifact_name, blob, filename, kind, session_id) — durable gallery sink.
+#: The platform wires this to ArtifactStore.save so every generation lands in
+#: the Creative gallery (and fires artifact.generated) instead of dying with
+#: the disposable session workspace.
+ArtifactSink = Callable[[str, bytes, str, str, "str | None"], Any]
 
 _BASE_URL = "https://beta.pixio.myapps.ai"
 _POLL_SECONDS = 5.0
@@ -71,6 +78,70 @@ def _default_http(
     return httpx.request(
         method, url, headers=headers, json=json_body, timeout=timeout, follow_redirects=True
     )
+
+
+def _default_http_upload(
+    url: str, headers: dict[str, str], blob: bytes, filename: str, mime: str
+) -> Any:
+    """Production multipart transport (uploads can be large — generous timeout)."""
+    import httpx
+
+    timeout = httpx.Timeout(300.0, connect=10.0)
+    return httpx.request(
+        "POST",
+        url,
+        headers=headers,
+        files={"file": (filename, blob, mime or "application/octet-stream")},
+        timeout=timeout,
+        follow_redirects=True,
+    )
+
+
+def pixio_publish(
+    key: str,
+    *,
+    blob: bytes | None = None,
+    filename: str = "",
+    mime: str = "",
+    url: str | None = None,
+    endpoint: str = "media",
+    http: HttpRequest | None = None,
+    http_upload: HttpUpload | None = None,
+) -> str:
+    """Publish media to Pixio's public CDN → a CLEAN, PERMANENT, PUBLIC url
+    (no signed query string) usable directly in generation params.
+
+    ``POST /api/v1/images`` (images only) / ``POST /api/v1/media`` (any media).
+    Two input modes: a local ``blob`` (multipart ``file=``) or a remote ``url``
+    to mirror (JSON ``{"url": …}``). Both return ``{"url": "https://…"}``.
+    SYNC (callers run it off the loop); raises ``RuntimeError`` with an honest
+    message on any failure — never a fabricated URL.
+    """
+    path_part = "images" if endpoint == "images" else "media"
+    target = f"{_BASE_URL}/api/v1/{path_part}"
+    auth = {"Authorization": f"Bearer {key}"}
+    if url:
+        resp = (http or _default_http)(
+            "POST", target, {**auth, "Accept": "application/json"}, {"url": url}
+        )
+    elif blob is not None:
+        resp = (http_upload or _default_http_upload)(
+            target, auth, blob, filename or "file.bin", mime
+        )
+    else:
+        raise RuntimeError("pixio_publish needs a blob or a url")
+    status = int(getattr(resp, "status_code", 0) or 0)
+    try:
+        payload = resp.json()
+    except Exception:  # noqa: BLE001 — non-JSON error bodies happen
+        payload = {}
+    err = _http_error(status, payload if isinstance(payload, dict) else {})
+    if err:
+        raise RuntimeError(err)
+    public = str((payload or {}).get("url") or "") if isinstance(payload, dict) else ""
+    if not public:
+        raise RuntimeError("Pixio upload returned no url")
+    return public
 
 
 def _detail(payload: Any) -> str:
@@ -141,10 +212,14 @@ class _PixioTool(Tool):
     permission_key = "pixio"  # one switch governs the whole creative group
 
     def __init__(
-        self, key_resolver: KeyResolver | None = None, http: HttpRequest | None = None
+        self,
+        key_resolver: KeyResolver | None = None,
+        http: HttpRequest | None = None,
+        artifact_sink: ArtifactSink | None = None,
     ) -> None:
         self._key_resolver: KeyResolver = key_resolver or _env_key_resolver
         self._http: HttpRequest = http or _default_http
+        self._artifact_sink = artifact_sink
 
     def _key(self) -> str | None:
         try:
@@ -205,16 +280,40 @@ class _PixioTool(Tool):
         dest = ctx.workspace / rel  # workspace-scoped by construction (§17)
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(blob)
+        # Durable copy → the Creative gallery (ArtifactStore; fires
+        # artifact.generated so the dashboard updates live). The workspace copy
+        # is DISPOSABLE — without this, creations vanish with the session.
+        gallery_note = ""
+        artifact_name = ""
+        if self._artifact_sink is not None:
+            try:
+                from ..creative.service import media_kind
+
+                artifact_name = f"creative-{_safe_name(generation_id)}"
+                self._artifact_sink(
+                    artifact_name,
+                    blob,
+                    dest.name,
+                    media_kind(dest.name) or "file",
+                    ctx.session_id,
+                )
+                gallery_note = " — added to the Creative gallery"
+            except Exception:  # noqa: BLE001 — the gallery is a bonus, never break delivery
+                artifact_name = ""
         return ToolResult(
             ok=True,
             output=(
                 f"generation {generation_id} succeeded — saved {rel} "
-                f"({len(blob)} bytes)\n{url}"
+                f"({len(blob)} bytes){gallery_note}\n{url}\n"
+                f"To show it to the user inline, include this markdown in your "
+                f"reply: ![generated media]({dest})"
             ),
             data={
                 "generation_id": generation_id,
                 "output_url": url,
                 "saved_path": rel,
+                "abs_path": str(dest),
+                **({"artifact": artifact_name} if artifact_name else {}),
                 "status": "succeeded",
             },
         )
@@ -335,8 +434,9 @@ class PixioGenerateTool(_PixioTool):
         key_resolver: KeyResolver | None = None,
         http: HttpRequest | None = None,
         poll_seconds: float = _POLL_SECONDS,
+        artifact_sink: ArtifactSink | None = None,
     ) -> None:
-        super().__init__(key_resolver, http)
+        super().__init__(key_resolver, http, artifact_sink)
         self._poll_seconds = poll_seconds  # test hook — production keeps ~5s
 
     async def _run(self, key: str, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
@@ -450,8 +550,119 @@ class PixioStatusTool(_PixioTool):
         )
 
 
+class PixioUploadTool(_PixioTool):
+    name = "pixio_upload"
+    description = (
+        "PUBLISH media to Pixio's public CDN and get a clean, PERMANENT, PUBLIC "
+        "url (no signed query string) — use that url directly in a generation "
+        "param (image-to-video reference frames, cover art, audio to extend…). "
+        "Give either a local `path` (image/video/audio file — uploaded via "
+        "multipart) or a remote `url` to mirror. NOTE: the result is publicly "
+        "reachable by anyone with the link — never upload private documents."
+    )
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "path": {
+                "type": "string",
+                "description": "Local media file — absolute, or relative to the session workspace.",
+            },
+            "url": {
+                "type": "string",
+                "description": "Remote media url to mirror instead of a local file.",
+            },
+            "endpoint": {
+                "type": "string",
+                "enum": ["media", "images"],
+                "description": "'images' accepts images only; 'media' (default) takes any media.",
+            },
+        },
+    }
+
+    #: Never push a non-media file (a config, a key, a database) to a PUBLIC CDN.
+    _MAX_UPLOAD = 200 * 1024 * 1024
+
+    def __init__(
+        self,
+        key_resolver: KeyResolver | None = None,
+        http: HttpRequest | None = None,
+        artifact_sink: ArtifactSink | None = None,
+        http_upload: HttpUpload | None = None,
+    ) -> None:
+        super().__init__(key_resolver, http, artifact_sink)
+        self._http_upload = http_upload or _default_http_upload
+
+    async def _run(self, key: str, args: dict[str, Any], ctx: ToolContext) -> ToolResult:
+        raw_path = str(args.get("path") or "").strip()
+        remote = str(args.get("url") or "").strip()
+        endpoint = "images" if str(args.get("endpoint") or "") == "images" else "media"
+        if bool(raw_path) == bool(remote):
+            return ToolResult(ok=False, error="give exactly one of `path` or `url`")
+
+        if remote:
+            try:
+                public = await asyncio.to_thread(
+                    pixio_publish, key, url=remote, endpoint=endpoint, http=self._http
+                )
+            except RuntimeError as exc:
+                return ToolResult(ok=False, error=str(exc))
+            return ToolResult(
+                ok=True,
+                output=f"mirrored → permanent public url:\n{public}",
+                data={"url": public, "source": remote},
+            )
+
+        from pathlib import Path
+
+        from ..core.fs_policy import fs_read_ok
+        from ..creative.service import media_kind, mime_for
+
+        p = Path(raw_path)
+        if not p.is_absolute():
+            p = ctx.workspace / raw_path
+        if not p.is_file():
+            return ToolResult(ok=False, error=f"no such file: {p}")
+        if media_kind(p.name) is None:
+            return ToolResult(
+                ok=False,
+                error=(
+                    f"'{p.suffix}' is not a media file — only image/video/audio "
+                    "may be published to the public CDN"
+                ),
+            )
+        ok, reason = fs_read_ok(str(p))
+        if not ok:
+            return ToolResult(ok=False, error=f"blocked: {reason}")
+        if p.stat().st_size > self._MAX_UPLOAD:
+            return ToolResult(ok=False, error="file too large to publish (200MB max)")
+        blob = p.read_bytes()
+        try:
+            public = await asyncio.to_thread(
+                pixio_publish,
+                key,
+                blob=blob,
+                filename=p.name,
+                mime=mime_for(p.name),
+                endpoint=endpoint,
+                http_upload=self._http_upload,
+            )
+        except RuntimeError as exc:
+            return ToolResult(ok=False, error=str(exc))
+        return ToolResult(
+            ok=True,
+            output=(
+                f"uploaded {p.name} ({len(blob)} bytes) → permanent public url:\n"
+                f"{public}\nPass it directly in a generation param."
+            ),
+            data={"url": public, "source": str(p)},
+        )
+
+
 def pixio_tools(
-    key_resolver: KeyResolver | None = None, http: HttpRequest | None = None
+    key_resolver: KeyResolver | None = None,
+    http: HttpRequest | None = None,
+    artifact_sink: ArtifactSink | None = None,
+    http_upload: HttpUpload | None = None,
 ) -> list[Tool]:
     """Build the Pixio creative tool group, keyed off the secrets vault.
 
@@ -462,8 +673,9 @@ def pixio_tools(
             registry.register(tool)
     """
     return [
-        PixioModelsTool(key_resolver, http),
-        PixioParamsTool(key_resolver, http),
-        PixioGenerateTool(key_resolver, http),
-        PixioStatusTool(key_resolver, http),
+        PixioModelsTool(key_resolver, http, artifact_sink),
+        PixioParamsTool(key_resolver, http, artifact_sink),
+        PixioGenerateTool(key_resolver, http, artifact_sink=artifact_sink),
+        PixioStatusTool(key_resolver, http, artifact_sink),
+        PixioUploadTool(key_resolver, http, artifact_sink, http_upload),
     ]

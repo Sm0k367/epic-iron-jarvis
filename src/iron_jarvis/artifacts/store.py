@@ -139,6 +139,15 @@ class ArtifactStore:
         files = sorted(p for p in vdir.iterdir() if p.is_file())
         return files[0] if files else None
 
+    def version_path(self, name: str, version: int | None = None) -> Path | None:
+        """The stored file's path for ``name`` (latest version when ``None``).
+        Traversal-safe: the name is slugified into a single segment under root."""
+        vs = self.versions(name)
+        if not vs:
+            return None
+        want = vs[-1] if version is None else version
+        return self._version_file(name, want)
+
     def read(self, name: str, version: int | None = None) -> bytes:
         """Return the bytes of ``name`` (latest version if ``version`` is None)."""
         vs = self.versions(name)

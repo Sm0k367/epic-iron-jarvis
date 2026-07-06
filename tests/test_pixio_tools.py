@@ -222,12 +222,13 @@ async def test_params_urlencodes_the_model_id(tmp_path):
 # --- factory ------------------------------------------------------------------------
 
 
-def test_factory_builds_the_four_tools():
+def test_factory_builds_the_five_tools():
     tools = pixio_tools(key_resolver=lambda: _KEY)
     assert [t.name for t in tools] == [
         "pixio_models",
         "pixio_params",
         "pixio_generate",
         "pixio_status",
+        "pixio_upload",
     ]
     assert all(t.perm_key() == "pixio" for t in tools)  # one permission switch

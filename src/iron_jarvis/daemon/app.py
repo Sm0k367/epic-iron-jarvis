@@ -838,6 +838,13 @@ def create_app(project_root: str | None = None) -> FastAPI:
         cfg = platform.config
         if provider == "mock" or cfg.default_provider != "mock":
             return False
+        # Only INFERENCE providers may become the default — connecting a
+        # non-LLM service (Pixio, a storage source) must never hijack routing.
+        try:
+            if provider not in platform.providers._factories:  # noqa: SLF001
+                return False
+        except Exception:  # noqa: BLE001 — be conservative, don't promote
+            return False
         cfg.default_provider = provider
         cfg.default_model = _PROMOTE_DEFAULT_MODEL.get(provider, cfg.default_model)
         _persist_config(["default_provider", "default_model"])
@@ -1240,6 +1247,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
     _routes.autonomy.register(app, d)
     _routes.settings.register(app, d)
     _routes.knowledge.register(app, d)
+    _routes.creative.register(app, d)
     _routes.connections.register(app, d)
     _routes.comm.register(app, d)
     _routes.agents.register(app, d)

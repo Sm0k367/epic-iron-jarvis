@@ -470,8 +470,15 @@ def build_platform(
     # a key (a clear "not configured" error, never a crash).
     from .tools.pixio import pixio_tools
 
+    def _creative_sink(name, blob, filename, kind, session_id=None):  # noqa: ANN001
+        """Every generation lands DURABLY in the Creative gallery (artifacts) —
+        the workspace copy dies with the session. save() fires artifact.generated,
+        so the gallery updates live."""
+        artifacts.save(name, blob, kind=kind, filename=filename, session_id=session_id)
+
     for tool in pixio_tools(
-        key_resolver=lambda: secrets.get("pixio") or os.environ.get("PIXIO_API_KEY")
+        key_resolver=lambda: secrets.get("pixio") or os.environ.get("PIXIO_API_KEY"),
+        artifact_sink=_creative_sink,
     ):
         registry.register(tool)
 

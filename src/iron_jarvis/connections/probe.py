@@ -23,6 +23,8 @@ _PROBES: dict[str, tuple[str, str]] = {
     "xai": ("https://api.x.ai/v1/models", "bearer"),
     "openrouter": ("https://openrouter.ai/api/v1/models", "bearer"),
     "google": ("https://www.googleapis.com/oauth2/v3/tokeninfo", "google_tokeninfo"),
+    # Pixio (creative media) — a cheap authenticated model list verifies the key.
+    "pixio": ("https://beta.pixio.myapps.ai/api/v1/models", "bearer"),
     # "custom" has no fixed URL — falls to the no-probe path (connected, unverified).
 }
 

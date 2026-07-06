@@ -9,7 +9,7 @@ runs the PACKAGED desktop app daily — treat every change as production.
 | Process | What | Port | Source |
 |---|---|---|---|
 | Daemon | FastAPI, all state + agents + tools | 127.0.0.1:8787 | `src/iron_jarvis/` |
-| Dashboard | Next.js 15 (36 routes), arc-reactor-cyan aesthetic | 127.0.0.1:8788 | `dashboard/` |
+| Dashboard | Next.js 15 (37 routes), arc-reactor-cyan aesthetic | 127.0.0.1:8788 | `dashboard/` |
 | Desktop | Electron: spawns both, tray, updates, Spotlight | — | `desktop/main.js` |
 
 Packaged layout: PyInstaller-frozen daemon (`packaging/ironjarvis.spec`) +
@@ -23,9 +23,9 @@ bearer token: `%APPDATA%/Iron Jarvis/token.txt` — every daemon request needs
 ## Commands
 
 ```bash
-# Backend tests (~981, offline, ~2min). ALWAYS run before shipping.
+# Backend tests (~1008, offline, ~2min). ALWAYS run before shipping.
 uv run pytest -q --no-header
-# Dashboard build (must show "Generating static pages (36/36)")
+# Dashboard build (must show "Generating static pages (37/37)")
 cd dashboard && pnpm build
 # Syntax-check desktop changes
 cd desktop && node --check main.js
