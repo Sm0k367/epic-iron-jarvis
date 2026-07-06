@@ -675,6 +675,46 @@ function createLoadingWindow() {
   loadingWin.loadFile(path.join(__dirname, "loading.html"));
 }
 
+// Chromium's spellchecker underlines misspellings out of the box, but
+// Electron shows NO context menu unless the app builds one — so corrections
+// were invisible. This surfaces the dictionary suggestions (click to replace),
+// add-to-dictionary, and the standard edit actions on right-click.
+function installSpellcheckMenu(win) {
+  win.webContents.on("context-menu", (_event, params) => {
+    const items = [];
+    for (const suggestion of params.dictionarySuggestions || []) {
+      items.push({
+        label: suggestion,
+        click: () => win.webContents.replaceMisspelling(suggestion),
+      });
+    }
+    if (params.misspelledWord) {
+      if (items.length === 0) items.push({ label: "No suggestions", enabled: false });
+      items.push(
+        {
+          label: `Add "${params.misspelledWord}" to dictionary`,
+          click: () =>
+            win.webContents.session.addWordToSpellCheckerDictionary(
+              params.misspelledWord
+            ),
+        },
+        { type: "separator" }
+      );
+    }
+    if (params.isEditable) {
+      items.push(
+        { role: "cut", enabled: params.selectionText.length > 0 },
+        { role: "copy", enabled: params.selectionText.length > 0 },
+        { role: "paste" },
+        { role: "selectAll" }
+      );
+    } else if (params.selectionText && params.selectionText.trim()) {
+      items.push({ role: "copy" });
+    }
+    if (items.length > 0) Menu.buildFromTemplate(items).popup({ window: win });
+  });
+}
+
 function createMainWindow() {
   const { bounds, center } = initialBounds();
 
@@ -690,11 +730,13 @@ function createMainWindow() {
       preload: path.join(__dirname, "preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      spellcheck: true, // OS spellchecker on Windows; suggestions via context menu
       // Hand the per-install token to preload.js so it can seed localStorage
       // BEFORE the dashboard bundle runs (no 401 race). Empty when token-less.
       additionalArguments: [`--ij-token=${authToken || ""}`],
     },
   });
+  installSpellcheckMenu(mainWin);
 
   mainWin.once("ready-to-show", () => {
     mainWin.show();
@@ -897,8 +939,10 @@ function createSpotlightWindow() {
       preload: path.join(__dirname, "spotlight-preload.js"),
       contextIsolation: true,
       nodeIntegration: false,
+      spellcheck: true,
     },
   });
+  installSpellcheckMenu(spotlightWin);
   spotlightWin.setAlwaysOnTop(true, "screen-saver");
   spotlightWin.loadFile(path.join(__dirname, "spotlight.html"));
   // Close it if it loses focus (feels like a real spotlight).
