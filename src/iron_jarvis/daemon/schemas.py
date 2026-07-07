@@ -193,6 +193,22 @@ class CreativeUploadBody(BaseModel):
     publish: bool = False
 
 
+#: File deliverables the project-task composer may request — each maps to a
+#: write_document suffix (markdown structure becomes REAL structure in
+#: docx/pdf/pptx/html; list-of-rows becomes real cells in xlsx/csv).
+PROJECT_TASK_OUTPUTS = ("chat", "md", "txt", "docx", "xlsx", "pptx", "pdf", "csv", "html")
+
+
+class ProjectTaskBody(BaseModel):
+    """Run a plain-text task INSIDE a project's folder, with a chosen
+    deliverable: an in-chat answer (the session summary) or a real file
+    (Excel/Word/Markdown/PDF/…) written into the folder."""
+
+    text: str
+    output: str = "chat"  # one of PROJECT_TASK_OUTPUTS
+    filename: str = ""  # optional file stem; defaults to a slug of the task
+
+
 class StudioStartBody(BaseModel):
     """Start a Creative Studio session: open a managed terminal in ``cwd``
     (it shows up on the Build page like any other) and launch the chosen AI

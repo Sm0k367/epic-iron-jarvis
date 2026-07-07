@@ -23,14 +23,20 @@ class DockerSandbox(Sandbox):
         self.image = image
 
     def available(self) -> bool:
-        """True iff the Docker daemon is reachable; swallows all errors (§16)."""
+        """True iff a LINUX-container Docker daemon is reachable; swallows all
+        errors (§16). A Windows-containers daemon (Docker Desktop in Windows
+        mode, GitHub windows runners) answers pings but cannot run our Linux
+        sandbox image — every create fails ("Windows does not support
+        PidsLimit", no linux/amd64 manifest) — so it honestly reports
+        unavailable instead of failing at run time."""
         client = None
         try:
             import docker  # lazy import
 
             client = docker.from_env()
             client.ping()
-            return True
+            os_type = str((client.info() or {}).get("OSType", "")).lower()
+            return os_type == "linux"
         except Exception:
             return False
         finally:

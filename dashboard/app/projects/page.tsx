@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  Bot,
   FolderKanban,
   Plus,
+  Send,
   Zap,
   ZapOff,
   Pencil,
@@ -19,7 +21,7 @@ import {
 } from "lucide-react";
 import { api, del, get, post, ApiError } from "@/lib/api";
 import { useApi } from "@/lib/useApi";
-import type { Project, SessionView, WorkflowRun } from "@/lib/types";
+import type { Project, SessionDetail, SessionView, WorkflowRun } from "@/lib/types";
 import {
   Card,
   Badge,
@@ -63,6 +65,30 @@ interface ActivateResult {
   active_project_id: string | null;
   name?: string;
 }
+
+/** Deliverable choices for POST /projects/{id}/task (mirrors the backend). */
+const TASK_OUTPUTS = [
+  { value: "chat", label: "Reply in chat" },
+  { value: "md", label: "Markdown (.md)" },
+  { value: "docx", label: "Word (.docx)" },
+  { value: "xlsx", label: "Excel (.xlsx)" },
+  { value: "pdf", label: "PDF (.pdf)" },
+  { value: "txt", label: "Text (.txt)" },
+  { value: "csv", label: "CSV (.csv)" },
+  { value: "pptx", label: "PowerPoint (.pptx)" },
+  { value: "html", label: "HTML (.html)" },
+] as const;
+type TaskOutput = (typeof TASK_OUTPUTS)[number]["value"];
+
+/** POST /projects/{id}/task → the started session FLAT, plus the deliverable. */
+interface ProjectTaskStart extends SessionView {
+  output: string;
+  /** Absolute file the agent was told to write (file outputs only). */
+  target_path?: string | null;
+}
+
+/** Session states that end the composer's 2s polling. */
+const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 function errText(err: unknown): string {
   return err instanceof ApiError ? err.message : String(err);
@@ -118,6 +144,72 @@ function ProjectCard({
   const [runs, setRuns] = useState<WorkflowRun[] | null>(null);
   const [runsLoading, setRunsLoading] = useState(false);
   const [runsError, setRunsError] = useState<string | null>(null);
+
+  /* Task composer: direct an agent inside this project's folder. */
+  const [taskText, setTaskText] = useState("");
+  const [taskOutput, setTaskOutput] = useState<TaskOutput>("chat");
+  const [taskFilename, setTaskFilename] = useState("");
+  const [taskStarting, setTaskStarting] = useState(false);
+  const [taskError, setTaskError] = useState<string | null>(null);
+  /** The last started run (start response, immutable) — one strip per card. */
+  const [taskRun, setTaskRun] = useState<ProjectTaskStart | null>(null);
+  /** Latest polled view of that run's session. */
+  const [taskSession, setTaskSession] = useState<SessionView | null>(null);
+  const [taskPollError, setTaskPollError] = useState<string | null>(null);
+
+  const taskDone =
+    taskSession !== null && TERMINAL_STATUSES.has(taskSession.status);
+
+  // Watch the started session every 2s until terminal. Pauses on collapse and
+  // cleans up on unmount; a replaced run (new taskRun) restarts the watch.
+  useEffect(() => {
+    if (!expanded || !taskRun || taskDone) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        // NB: GET /sessions/{id} returns {session, transcript} — NESTED.
+        const d = await get<SessionDetail>(
+          `/sessions/${encodeURIComponent(taskRun.id)}`,
+        );
+        if (!alive) return;
+        setTaskSession(d.session);
+        setTaskPollError(null);
+      } catch (err) {
+        if (alive) setTaskPollError(errText(err));
+      }
+    };
+    void tick();
+    const timer = setInterval(() => void tick(), 2000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, [expanded, taskRun, taskDone]);
+
+  async function startTask() {
+    const text = taskText.trim();
+    if (!text || taskStarting) return;
+    setTaskStarting(true);
+    setTaskError(null);
+    try {
+      const body: Record<string, string> = { text, output: taskOutput };
+      if (taskOutput !== "chat" && taskFilename.trim())
+        body.filename = taskFilename.trim();
+      const started = await post<ProjectTaskStart>(
+        `/projects/${encodeURIComponent(p.id)}/task`,
+        body,
+      );
+      setTaskRun(started); // replaces any previous strip
+      setTaskSession(started); // flat SessionView snapshot until the first poll
+      setTaskPollError(null);
+      setTaskText("");
+      setTaskFilename("");
+    } catch (err) {
+      setTaskError(errText(err));
+    } finally {
+      setTaskStarting(false);
+    }
+  }
 
   async function run(action: string, fn: () => Promise<unknown>): Promise<boolean> {
     setBusy(action);
@@ -367,6 +459,143 @@ function ProjectCard({
 
       {expanded && (
         <div className="mt-3.5 space-y-4 border-t hairline pt-3.5">
+          {/* --- Task composer ------------------------------------------------ */}
+          <section>
+            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+              <Bot size={11} /> Run a task
+            </div>
+            <div className="space-y-2">
+              <textarea
+                value={taskText}
+                onChange={(e) => setTaskText(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    void startTask();
+                  }
+                }}
+                rows={2}
+                aria-label={`Task for an agent in ${p.name}`}
+                placeholder="Ask an agent to do something in this project… (e.g. 'summarize every PDF in here into one report')"
+                className="field resize-y text-sm"
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  aria-label="Deliverable"
+                  value={taskOutput}
+                  onChange={(e) => setTaskOutput(e.target.value as TaskOutput)}
+                  className="field min-w-0 flex-1 text-sm"
+                >
+                  {TASK_OUTPUTS.map((o) => (
+                    <option
+                      key={o.value}
+                      value={o.value}
+                      disabled={o.value !== "chat" && !p.root}
+                    >
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+                {taskOutput !== "chat" && (
+                  <input
+                    value={taskFilename}
+                    onChange={(e) => setTaskFilename(e.target.value)}
+                    placeholder="filename (optional)"
+                    aria-label="Deliverable filename"
+                    className="field w-44 min-w-0 font-mono text-sm"
+                  />
+                )}
+                <button
+                  type="button"
+                  onClick={() => void startTask()}
+                  disabled={taskStarting || !taskText.trim()}
+                  title="Start an agent session on this task"
+                  className="btn-accent shrink-0"
+                >
+                  {taskStarting ? (
+                    <LoaderInline label="Starting…" />
+                  ) : (
+                    <>
+                      <Send size={13} /> Run
+                    </>
+                  )}
+                </button>
+              </div>
+              {!p.root && (
+                <p className="text-[11px] text-zinc-600">
+                  A file deliverable needs the project to have a folder — this
+                  one has none, so only “Reply in chat” is available.
+                </p>
+              )}
+              {taskError && <ErrorNote>{taskError}</ErrorNote>}
+
+              {taskRun && (
+                <div className="rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    {!taskDone ? (
+                      <span className="text-xs text-zinc-400">
+                        <LoaderInline label="Agent working…" />
+                      </span>
+                    ) : (
+                      <Badge value={taskSession?.status ?? "unknown"} />
+                    )}
+                    <Link
+                      href={`/sessions/${encodeURIComponent(taskRun.id)}`}
+                      className="shrink-0 text-[11px] text-accent-soft transition-colors hover:text-accent"
+                    >
+                      open session →
+                    </Link>
+                  </div>
+
+                  {!taskDone && taskPollError && (
+                    <p className="mt-1.5 text-[11px] text-zinc-500">
+                      status check failed ({taskPollError}) — retrying…
+                    </p>
+                  )}
+
+                  {taskDone && taskSession?.status === "completed" && (
+                    <>
+                      {taskRun.output !== "chat" && taskRun.target_path && (
+                        <div className="mt-1.5 flex items-center gap-1.5 text-xs text-zinc-300">
+                          <span className="shrink-0 text-zinc-500">Saved:</span>
+                          <span
+                            className="min-w-0 truncate font-mono"
+                            title={taskRun.target_path}
+                          >
+                            {taskRun.target_path}
+                          </span>
+                        </div>
+                      )}
+                      {taskSession.summary ? (
+                        <div
+                          className={`mt-1.5 whitespace-pre-wrap text-xs text-zinc-300 ${
+                            taskRun.output === "chat"
+                              ? "max-h-56 overflow-y-auto"
+                              : "line-clamp-3"
+                          }`}
+                        >
+                          {taskSession.summary}
+                        </div>
+                      ) : (
+                        <p className="mt-1.5 text-xs text-zinc-500">
+                          The agent finished without a summary — open the
+                          session for the full transcript.
+                        </p>
+                      )}
+                    </>
+                  )}
+
+                  {taskDone && taskSession?.status !== "completed" && (
+                    <p className="mt-1.5 whitespace-pre-wrap text-xs text-rose-200">
+                      {taskSession?.summary ||
+                        `The session ${taskSession?.status} without a summary — open it for details.`}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          </section>
+
           {/* --- Sessions ---------------------------------------------------- */}
           <section>
             <div className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">

@@ -52,6 +52,12 @@ class _FakeClient:
         self.pinged = True
         return True
 
+    def info(self):
+        # available() now checks the daemon's container OS — this fake models a
+        # working LINUX daemon (a Windows-containers daemon can't run the
+        # sandbox image and must report unavailable; see test_project_tasks).
+        return {"OSType": "linux"}
+
     def close(self):
         self.closed = True
 
