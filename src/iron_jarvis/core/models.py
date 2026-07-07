@@ -62,8 +62,32 @@ class Project(SQLModel, table=True):
     id: str = Field(default_factory=lambda: new_id("project"), primary_key=True)
     name: str
     root: str = ""  # optional folder this project lives in (for terminals etc.)
-    brief: str = ""  # goal + key facts, injected into tagged agent calls
+    brief: str = ""  # short description of what the project is
+    #: Custom instructions injected as a system directive into EVERY project
+    #: chat + task ("respond as…", "always cite…") — the Claude-Projects
+    #: instructions concept, distinct from the descriptive brief.
+    instructions: str = ""
+    #: Optional per-project default model ("provider::model" halves) applied to
+    #: project chats/tasks when the user hasn't picked one for the turn.
+    default_provider: str = ""
+    default_model: str = ""
     status: str = "active"  # active | archived
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class ProjectKnowledge(SQLModel, table=True):
+    """A persistent knowledge item attached to ONE project (a file's extracted
+    text, or a pasted note). Every conversation and task in the project is
+    grounded in these — the Claude-Projects "project knowledge" concept.
+    Embedded on write so large knowledge bases retrieve the relevant parts."""
+
+    id: str = Field(default_factory=lambda: new_id("pk"), primary_key=True)
+    project_id: str = Field(index=True)
+    name: str = ""
+    kind: str = "note"  # note | file
+    text: str = ""
+    size: int = 0  # characters (shown in the UI, drives the all-vs-retrieve choice)
+    embedding_json: str = "[]"
     created_at: datetime = Field(default_factory=utcnow)
 
 

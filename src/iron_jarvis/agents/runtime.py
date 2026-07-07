@@ -63,10 +63,25 @@ class AgentRuntime:
             "\n\n# Project context",
             f"You are working within the user's project: {project.name}",
         ]
+        if getattr(project, "instructions", "").strip():
+            lines.append(
+                "Project instructions (follow these):\n"
+                + project.instructions.strip()[:2000]
+            )
         if project.brief.strip():
             lines.append(f"Project brief: {project.brief.strip()[:2000]}")
         if project.root.strip():
             lines.append(f"Project folder: {project.root.strip()}")
+        # Project KNOWLEDGE — the whole base when small, else the parts relevant
+        # to this task (cosine over the stored vectors). Best-effort.
+        try:
+            from ..projects.knowledge import ground as _ground
+
+            know = _ground(self.p, session.project_id, session.task)
+            if know.strip():
+                lines.append("Project knowledge (reference material):\n" + know)
+        except Exception:  # noqa: BLE001 — grounding must never break a run
+            pass
         recent = [
             f"- [{s.status.value}] {s.task[:80]}: {(s.summary or '(no summary)')[:160]}"
             for s in siblings

@@ -89,6 +89,10 @@ class ChatBody(BaseModel):
     #: Tools the user ARMED via the "+" menu (registry names, max 6). When set,
     #: the chat runs a small tool loop (up to 4 rounds) with JUST these tools.
     tools: list[str] = []
+    #: Ground THIS turn in a SPECIFIC project (instructions + knowledge + brief)
+    #: — an in-project conversation, independent of the globally-active project.
+    #: "" = fall back to the active project (unchanged behavior).
+    project_id: str = ""
 
 
 class ProjectCreate(BaseModel):
@@ -104,6 +108,19 @@ class ProjectPatch(BaseModel):
     brief: str | None = None
     root: str | None = None
     status: str | None = None  # active | archived
+    instructions: str | None = None  # per-project custom instructions
+    default_provider: str | None = None  # per-project default model halves
+    default_model: str | None = None
+
+
+class ProjectKnowledgeBody(BaseModel):
+    """Add a knowledge item to a project: a pasted note (``text``), or a file
+    (``content_b64`` — extracted to text server-side). ``name`` labels it."""
+
+    name: str = ""
+    text: str = ""
+    content_b64: str = ""
+    filename: str = ""
 
 
 class ContinueBody(BaseModel):

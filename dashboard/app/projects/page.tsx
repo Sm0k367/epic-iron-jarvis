@@ -1,35 +1,20 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
-  Bot,
   FolderKanban,
   Plus,
-  Send,
   Zap,
   ZapOff,
-  Pencil,
   ArchiveRestore,
-  ChevronDown,
-  ChevronUp,
   Folder,
   FolderOpen,
-  History,
-  MessageSquare,
-  Workflow,
-  SquareKanban,
-  ShieldCheck,
-  Check,
-  Play,
-  Music,
-  Paperclip,
 } from "lucide-react";
-import { api, del, get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
-import { useApi, usePolledApi } from "@/lib/useApi";
-import { useReviews } from "@/lib/useReviews";
-import { KanbanBoard } from "@/components/kanban/KanbanBoard";
-import type { Project, SessionDetail, SessionView, WorkflowRun } from "@/lib/types";
+import { del, patch, post, ApiError } from "@/lib/api";
+import { useApi } from "@/lib/useApi";
+import type { Project } from "@/lib/types";
 import {
   Card,
   Badge,
@@ -37,36 +22,13 @@ import {
   Empty,
   SkeletonRows,
   ErrorNote,
-  SuccessNote,
   LoaderInline,
   ConfirmButton,
-  Spinner,
 } from "@/components/ui";
 import { PageHeader } from "@/components/PageHeader";
 import { PageShell, Reveal } from "@/components/motion";
 import { FilePickerModal } from "@/components/FilePickerModal";
 import { timeAgo } from "@/lib/format";
-
-/** api.ts exports no PATCH helper, so build one on the exported generic `api`. */
-const patch = <T,>(path: string, body: unknown) =>
-  api<T>(path, { method: "PATCH", body: JSON.stringify(body) });
-
-/** GET /projects/{id} → the project plus its recent sessions (last 20). */
-interface ProjectDetail {
-  project: Project;
-  sessions: SessionView[];
-}
-
-/** Slim row from GET /chat/threads — just what the hub list renders. */
-interface ProjectThread {
-  id: string;
-  title: string;
-  updated_at: string;
-  project_id?: string | null;
-}
-
-/** How many rows each hub section shows at most. */
-const HUB_LIMIT = 8;
 
 /** POST /projects/{id}/activate & /projects/deactivate response. */
 interface ActivateResult {
@@ -74,72 +36,8 @@ interface ActivateResult {
   name?: string;
 }
 
-/** Deliverable choices for POST /projects/{id}/task (mirrors the backend). */
-const TASK_OUTPUTS = [
-  { value: "chat", label: "Reply in chat" },
-  { value: "md", label: "Markdown (.md)" },
-  { value: "docx", label: "Word (.docx)" },
-  { value: "xlsx", label: "Excel (.xlsx)" },
-  { value: "pdf", label: "PDF (.pdf)" },
-  { value: "txt", label: "Text (.txt)" },
-  { value: "csv", label: "CSV (.csv)" },
-  { value: "pptx", label: "PowerPoint (.pptx)" },
-  { value: "html", label: "HTML (.html)" },
-] as const;
-type TaskOutput = (typeof TASK_OUTPUTS)[number]["value"];
-
-/** POST /projects/{id}/task → the started session FLAT, plus the deliverable. */
-interface ProjectTaskStart extends SessionView {
-  output: string;
-  /** Absolute file the agent was told to write (file outputs only). */
-  target_path?: string | null;
-}
-
-/** One permissioned tool the task is likely to need (POST …/task/plan). */
-interface PlanTool {
-  name: string;
-  perm_key: string;
-  why: string;
-}
-/** POST /projects/{id}/task/plan → the tools to bundle into one grant. */
-interface TaskPlan {
-  tools: PlanTool[];
-  note?: string;
-}
-
-/** One artifact a session GENERATED (GET /artifacts?session_id=…). */
-interface TaskArtifact {
-  name: string;
-  version: number;
-  kind: string;
-  filename: string;
-  media: "image" | "video" | "audio" | null;
-  size: number;
-  created_at: string;
-  url: string; // "/creative/file/<name>" for media items
-}
-
-/** Session states that end the composer's 2s polling. */
-const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
-
 function errText(err: unknown): string {
   return err instanceof ApiError ? err.message : String(err);
-}
-
-/** Media tags can't send the Authorization header — the token rides as ?token=. */
-function mediaSrc(url: string): string {
-  const t = ijToken();
-  const sep = url.includes("?") ? "&" : "?";
-  return `${API_BASE}${url}${t ? `${sep}token=${encodeURIComponent(t)}` : ""}`;
-}
-
-/** Segmented Activity|Board toggle button styling. */
-function segClass(active: boolean): string {
-  return `inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
-    active
-      ? "bg-accent/[0.14] text-accent-soft"
-      : "text-zinc-400 hover:text-zinc-200"
-  }`;
 }
 
 /* Small action-button styles (match the Templates "Use" pill + ghost rows). */
@@ -162,54 +60,12 @@ function ActiveBadge() {
 }
 
 /**
- * The per-project Kanban. Mounted ONLY while the Board tab is showing, so a
- * collapsed (or Activity-tab) card never 4s-polls /sessions. Feeds KanbanBoard
- * exactly like the standalone /kanban page, scoped to this project.
+ * A lightweight project tile. The whole card is a link into the project's
+ * workspace (`/projects/{id}`) via a stretched overlay; the lifecycle buttons
+ * sit above it and act without navigating. All the heavy machinery — task
+ * composer, board, activity hub, artifacts — now lives in that workspace route.
  */
-function ProjectBoard({ projectId }: { projectId: string }) {
-  const { data, error, reload } = usePolledApi<{ sessions: SessionView[] }>(
-    "/sessions",
-    4000,
-  );
-  const sessions = data?.sessions;
-  const reviewsState = useReviews(sessions);
-  const list = sessions ?? [];
-  const mine = list.filter((s) => s.project_id === projectId);
-  const offline = error && error.status === 0;
-
-  function refreshAll() {
-    reload();
-    reviewsState.reload();
-  }
-
-  if (offline && list.length === 0) {
-    return (
-      <p className="py-2 text-xs text-zinc-500">
-        Board unavailable — the daemon looks offline.
-      </p>
-    );
-  }
-  if (mine.length === 0) {
-    return (
-      <div className="py-2 text-xs text-zinc-500">
-        No sessions in this project yet — run a task above, or make it active and
-        start a chat.
-      </div>
-    );
-  }
-  // KanbanBoard filters to projectId itself; pass the full list so its lane math
-  // stays identical to the standalone page.
-  return (
-    <KanbanBoard
-      sessions={list}
-      reviews={reviewsState.reviews}
-      reload={refreshAll}
-      projectId={projectId}
-    />
-  );
-}
-
-function ProjectCard({
+function ProjectTile({
   project: p,
   onChanged,
 }: {
@@ -219,323 +75,80 @@ function ProjectCard({
   const archived = p.status === "archived";
   const sessions = p.session_count ?? 0;
 
-  /** Which card action is in flight ("activate" | "brief" | "status" | null). */
+  /** Which action is in flight ("activate" | "status" | "delete" | null). */
   const [busy, setBusy] = useState<string | null>(null);
   const [cardError, setCardError] = useState<string | null>(null);
 
-  /* Inline brief editor */
-  const [editing, setEditing] = useState(false);
-  const [briefDraft, setBriefDraft] = useState(p.brief);
-
-  /* Expandable activity hub (all fetched lazily on first expand) */
-  const [expanded, setExpanded] = useState(false);
-  const [detail, setDetail] = useState<ProjectDetail | null>(null);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [detailError, setDetailError] = useState<string | null>(null);
-  /* Chat threads tagged into this project (null = not fetched yet). */
-  const [threads, setThreads] = useState<ProjectThread[] | null>(null);
-  const [threadsLoading, setThreadsLoading] = useState(false);
-  const [threadsError, setThreadsError] = useState<string | null>(null);
-  /* Workflow runs tagged into this project (null = not fetched yet). */
-  const [runs, setRuns] = useState<WorkflowRun[] | null>(null);
-  const [runsLoading, setRunsLoading] = useState(false);
-  const [runsError, setRunsError] = useState<string | null>(null);
-
-  /* Expanded view: the activity hub, or this project's embedded Kanban board. */
-  const [view, setView] = useState<"activity" | "board">("activity");
-
-  /* Task composer: direct an agent inside this project's folder. */
-  const [taskText, setTaskText] = useState("");
-  const [taskOutput, setTaskOutput] = useState<TaskOutput>("chat");
-  const [taskFilename, setTaskFilename] = useState("");
-  const [taskStarting, setTaskStarting] = useState(false);
-  const [taskError, setTaskError] = useState<string | null>(null);
-  /** The last started run (start response, immutable) — one strip per card. */
-  const [taskRun, setTaskRun] = useState<ProjectTaskStart | null>(null);
-  /** Latest polled view of that run's session. */
-  const [taskSession, setTaskSession] = useState<SessionView | null>(null);
-  const [taskPollError, setTaskPollError] = useState<string | null>(null);
-  /** Artifacts the finished run produced (null = not fetched for this run yet). */
-  const [taskArtifacts, setTaskArtifacts] = useState<TaskArtifact[] | null>(null);
-
-  /* Two-tap tool permission — planning → bundled grant → run. */
-  const [planning, setPlanning] = useState(false);
-  /** The pending grant panel (tools.length > 0). Null = no panel showing. */
-  const [pendingPlan, setPendingPlan] = useState<TaskPlan | null>(null);
-  /** perm_key → checked. Defaults every planned tool to allowed. */
-  const [checkedKeys, setCheckedKeys] = useState<Record<string, boolean>>({});
-  /** One-line note from the planner (e.g. "no model connected"). */
-  const [planNote, setPlanNote] = useState<string | null>(null);
-
-  const taskDone =
-    taskSession !== null && TERMINAL_STATUSES.has(taskSession.status);
-
-  // Watch the started session every 2s until terminal. Pauses on collapse and
-  // cleans up on unmount; a replaced run (new taskRun) restarts the watch.
-  useEffect(() => {
-    if (!expanded || !taskRun || taskDone) return;
-    let alive = true;
-    const tick = async () => {
-      try {
-        // NB: GET /sessions/{id} returns {session, transcript} — NESTED.
-        const d = await get<SessionDetail>(
-          `/sessions/${encodeURIComponent(taskRun.id)}`,
-        );
-        if (!alive) return;
-        setTaskSession(d.session);
-        setTaskPollError(null);
-      } catch (err) {
-        if (alive) setTaskPollError(errText(err));
-      }
-    };
-    void tick();
-    const timer = setInterval(() => void tick(), 2000);
-    return () => {
-      alive = false;
-      clearInterval(timer);
-    };
-  }, [expanded, taskRun, taskDone]);
-
-  // Once a run reaches a terminal status, fetch what it produced (once per run).
-  // Honest empty (or a fetch error) => render nothing.
-  useEffect(() => {
-    if (!taskDone || !taskRun || taskArtifacts !== null) return;
-    let alive = true;
-    get<{ artifacts: TaskArtifact[] }>(
-      `/artifacts?session_id=${encodeURIComponent(taskRun.id)}`,
-    )
-      .then((d) => {
-        if (alive) setTaskArtifacts(d.artifacts ?? []);
-      })
-      .catch(() => {
-        if (alive) setTaskArtifacts([]);
-      });
-    return () => {
-      alive = false;
-    };
-  }, [taskDone, taskRun, taskArtifacts]);
-
-  /** Fire the task with an explicit tool grant (the approved perm_keys). */
-  async function startTask(allowTools: string[]) {
-    const text = taskText.trim();
-    if (!text) return;
-    setTaskStarting(true);
-    setTaskError(null);
-    try {
-      const body: Record<string, unknown> = {
-        text,
-        output: taskOutput,
-        allow_tools: allowTools,
-      };
-      if (taskOutput !== "chat" && taskFilename.trim())
-        body.filename = taskFilename.trim();
-      const started = await post<ProjectTaskStart>(
-        `/projects/${encodeURIComponent(p.id)}/task`,
-        body,
-      );
-      setTaskRun(started); // replaces any previous strip
-      setTaskSession(started); // flat SessionView snapshot until the first poll
-      setTaskPollError(null);
-      setTaskArtifacts(null); // new run → re-fetch artifacts when it finishes
-      setTaskText("");
-      setTaskFilename("");
-      setPendingPlan(null); // dismiss the grant panel
-      setCheckedKeys({});
-    } catch (err) {
-      setTaskError(errText(err));
-    } finally {
-      setTaskStarting(false);
-    }
-  }
-
-  // Run click: plan first (which permissioned tools this needs), then either
-  // show a bundled grant panel or run straight through. A plan failure never
-  // blocks — we fall back to running with an empty grant.
-  async function onRun() {
-    const text = taskText.trim();
-    if (!text || taskStarting || planning) return;
-    setTaskError(null);
-    setPlanNote(null);
-    setPendingPlan(null);
-    setPlanning(true);
-    let plan: TaskPlan | null = null;
-    try {
-      plan = await post<TaskPlan>(
-        `/projects/${encodeURIComponent(p.id)}/task/plan`,
-        { text },
-      );
-    } catch {
-      plan = null; // planning is best-effort — proceed without a grant
-    } finally {
-      setPlanning(false);
-    }
-    const tools = plan?.tools ?? [];
-    if (tools.length > 0) {
-      setCheckedKeys(Object.fromEntries(tools.map((t) => [t.perm_key, true])));
-      setPendingPlan(plan);
-      return; // wait for the user to confirm the grant
-    }
-    // Nothing permissioned needed (or no model) — run with an empty grant.
-    if (plan?.note) setPlanNote(plan.note);
-    await startTask([]);
-  }
-
-  /** Confirm the grant panel — send only the tools left checked. */
-  function confirmGrant() {
-    const keys = (pendingPlan?.tools ?? [])
-      .filter((t) => checkedKeys[t.perm_key])
-      .map((t) => t.perm_key);
-    void startTask(keys);
-  }
-
-  function cancelGrant() {
-    setPendingPlan(null);
-    setCheckedKeys({});
-  }
-
-  async function run(action: string, fn: () => Promise<unknown>): Promise<boolean> {
+  async function run(action: string, fn: () => Promise<unknown>): Promise<void> {
     setBusy(action);
     setCardError(null);
     try {
       await fn();
       onChanged();
-      return true;
     } catch (err) {
       setCardError(errText(err));
-      return false;
     } finally {
       setBusy(null);
     }
   }
 
   const activate = () =>
-    run("activate", () =>
+    void run("activate", () =>
       post<ActivateResult>(`/projects/${encodeURIComponent(p.id)}/activate`),
     );
   const deactivate = () =>
-    run("activate", () => post<ActivateResult>("/projects/deactivate"));
+    void run("activate", () => post<ActivateResult>("/projects/deactivate"));
   const setStatus = (status: "active" | "archived") =>
-    run("status", () =>
+    void run("status", () =>
       patch<Project>(`/projects/${encodeURIComponent(p.id)}`, { status }),
     );
 
-  async function saveBrief() {
-    const ok = await run("brief", () =>
-      patch<Project>(`/projects/${encodeURIComponent(p.id)}`, {
-        brief: briefDraft.trim(),
-      }),
-    );
-    if (ok) setEditing(false); // keep the editor open on failure so nothing is lost
-  }
-
-  async function toggleSessions() {
-    const next = !expanded;
-    setExpanded(next);
-    if (!next) return;
-    // The three hub sections load independently — one failing endpoint never
-    // blanks the others. A failed section retries on the next expand.
-    if (threads === null && !threadsLoading) {
-      setThreadsLoading(true);
-      setThreadsError(null);
-      get<{ threads: ProjectThread[] }>("/chat/threads")
-        .then((d) =>
-          setThreads((d.threads ?? []).filter((t) => t.project_id === p.id)),
-        )
-        .catch((err) => setThreadsError(errText(err)))
-        .finally(() => setThreadsLoading(false));
-    }
-    if (runs === null && !runsLoading) {
-      setRunsLoading(true);
-      setRunsError(null);
-      get<{ runs: WorkflowRun[] }>("/workflows/runs")
-        .then((d) =>
-          setRuns(
-            (d.runs ?? [])
-              .filter((r) => r.project_id === p.id)
-              .sort(
-                (a, b) =>
-                  new Date(b.started_at ?? 0).getTime() -
-                  new Date(a.started_at ?? 0).getTime(),
-              ),
-          ),
-        )
-        .catch((err) => setRunsError(errText(err)))
-        .finally(() => setRunsLoading(false));
-    }
-    if (detail || detailLoading) return;
-    setDetailLoading(true);
-    setDetailError(null);
-    try {
-      setDetail(await get<ProjectDetail>(`/projects/${encodeURIComponent(p.id)}`));
-    } catch (err) {
-      setDetailError(errText(err));
-    } finally {
-      setDetailLoading(false);
-    }
-  }
-
   return (
-    <Card hover className={archived ? "opacity-70" : ""}>
-      <div className="flex flex-wrap items-center gap-2">
-        <span className="min-w-0 truncate font-medium text-zinc-100">{p.name}</span>
-        {p.active && <ActiveBadge />}
-        {archived && <Badge value="archived" tone="slate" />}
-      </div>
+    <div
+      className={`card-surface group relative flex flex-col gap-2 p-5 transition-all duration-300 hover:-translate-y-0.5 hover:shadow-card-hover ${
+        archived ? "opacity-70" : ""
+      }`}
+    >
+      {/* Stretched link — a click anywhere on the card opens the workspace. */}
+      <Link
+        href={`/projects/${encodeURIComponent(p.id)}`}
+        aria-label={`Open ${p.name} workspace`}
+        className="absolute inset-0 z-10 rounded-2xl focus:outline-none focus-visible:ring-2 focus-visible:ring-accent/50"
+      />
 
-      {editing ? (
-        <div className="mt-3 space-y-2">
-          <textarea
-            value={briefDraft}
-            onChange={(e) => setBriefDraft(e.target.value)}
-            rows={4}
-            aria-label={`Brief for ${p.name}`}
-            placeholder="Goal + key facts the AI should always know…"
-            className="field resize-y text-sm"
-          />
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={saveBrief}
-              disabled={busy !== null}
-              className="btn-accent"
-            >
-              {busy === "brief" ? <LoaderInline label="Saving…" /> : "Save brief"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setEditing(false);
-                setBriefDraft(p.brief);
-              }}
-              className="btn-ghost"
-            >
-              Cancel
-            </button>
+      {/* Info block sits above the link but passes clicks through to it. */}
+      <div className="pointer-events-none relative z-20 flex flex-col gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="min-w-0 truncate font-medium text-zinc-100">
+            {p.name}
+          </span>
+          {p.active && <ActiveBadge />}
+          {archived && <Badge value="archived" tone="slate" />}
+        </div>
+
+        {p.brief ? (
+          <p className="line-clamp-2 text-sm text-zinc-400">{p.brief}</p>
+        ) : (
+          <p className="text-sm italic text-zinc-600">
+            No brief yet — open the workspace to add one.
+          </p>
+        )}
+
+        {p.root && (
+          <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+            <Folder size={11} className="shrink-0" />
+            <span className="truncate font-mono">{p.root}</span>
           </div>
-        </div>
-      ) : p.brief ? (
-        <p className="mt-2 line-clamp-3 text-sm text-zinc-400">{p.brief}</p>
-      ) : (
-        <p className="mt-2 text-sm italic text-zinc-600">
-          No brief yet — add one so every chat starts with the right context.
-        </p>
-      )}
+        )}
 
-      {p.root && (
-        <div className="mt-2 flex items-center gap-1.5 text-[11px] text-zinc-500">
-          <Folder size={11} className="shrink-0" />
-          <span className="truncate font-mono">{p.root}</span>
+        <div className="text-[11px] text-zinc-600">
+          {sessions} {sessions === 1 ? "session" : "sessions"} · created{" "}
+          {timeAgo(p.created_at)}
         </div>
-      )}
-
-      <div className="mt-2.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-zinc-600">
-        <span>
-          {sessions} {sessions === 1 ? "session" : "sessions"}
-        </span>
-        <span>created {timeAgo(p.created_at)}</span>
       </div>
 
-      <div className="mt-3.5 flex flex-wrap items-center gap-1.5">
+      {/* Lifecycle actions — re-enable pointer events so they don't navigate. */}
+      <div className="pointer-events-none relative z-20 mt-2 flex flex-wrap items-center gap-1.5">
         {!archived &&
           (p.active ? (
             <button
@@ -543,7 +156,7 @@ function ProjectCard({
               onClick={deactivate}
               disabled={busy !== null}
               title="Stop feeding this project's context into new sessions"
-              className={BTN_GHOST}
+              className={`${BTN_GHOST} pointer-events-auto`}
             >
               {busy === "activate" ? (
                 <LoaderInline label="Deactivating…" />
@@ -559,7 +172,7 @@ function ProjectCard({
               onClick={activate}
               disabled={busy !== null}
               title="New chats, sessions, and workflows will carry this project's context"
-              className={BTN_PILL}
+              className={`${BTN_PILL} pointer-events-auto`}
             >
               {busy === "activate" ? (
                 <LoaderInline label="Activating…" />
@@ -571,27 +184,12 @@ function ProjectCard({
             </button>
           ))}
 
-        {!editing && (
-          <button
-            type="button"
-            onClick={() => {
-              setBriefDraft(p.brief);
-              setEditing(true);
-              setCardError(null);
-            }}
-            disabled={busy !== null}
-            className={BTN_GHOST}
-          >
-            <Pencil size={13} /> Edit brief
-          </button>
-        )}
-
         {archived ? (
           <button
             type="button"
             onClick={() => setStatus("active")}
             disabled={busy !== null}
-            className={BTN_GHOST}
+            className={`${BTN_GHOST} pointer-events-auto`}
           >
             {busy === "status" ? (
               <LoaderInline label="Restoring…" />
@@ -603,9 +201,8 @@ function ProjectCard({
           </button>
         ) : (
           <ConfirmButton
-            onConfirm={() => {
-              void setStatus("archived");
-            }}
+            className="pointer-events-auto"
+            onConfirm={() => setStatus("archived")}
             label="Archive"
             confirmLabel="Archive?"
             title={`Archive "${p.name}" — it stops appearing as a workspace but nothing is deleted`}
@@ -613,459 +210,29 @@ function ProjectCard({
         )}
 
         <ConfirmButton
-          onConfirm={() => {
-            void run("delete", () => del(`/projects/${encodeURIComponent(p.id)}`));
-          }}
+          className="pointer-events-auto"
+          onConfirm={() =>
+            run("delete", () => del(`/projects/${encodeURIComponent(p.id)}`))
+          }
           label="Delete"
           confirmLabel="Delete from app?"
           title={`Remove "${p.name}" from Iron Jarvis only — your files and folders on this computer are NOT touched`}
         />
-
-        <button
-          type="button"
-          onClick={toggleSessions}
-          aria-expanded={expanded}
-          title="Recent sessions, chat threads, and workflow runs in this project"
-          className={`${BTN_GHOST} ml-auto`}
-        >
-          <History size={13} /> Activity
-          {expanded ? <ChevronUp size={13} /> : <ChevronDown size={13} />}
-        </button>
       </div>
 
       {cardError && (
-        <div className="mt-3">
-          <ErrorNote>{cardError}</ErrorNote>
-        </div>
-      )}
-
-      {expanded && (
-        <div className="mt-3.5 space-y-4 border-t hairline pt-3.5">
-          {/* View toggle: the activity hub, or this project's live Kanban board. */}
-          <div className="flex items-center gap-2">
-            <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.02] p-0.5">
-              <button
-                type="button"
-                onClick={() => setView("activity")}
-                aria-pressed={view === "activity"}
-                className={segClass(view === "activity")}
-              >
-                <History size={12} /> Activity
-              </button>
-              <button
-                type="button"
-                onClick={() => setView("board")}
-                aria-pressed={view === "board"}
-                className={segClass(view === "board")}
-              >
-                <SquareKanban size={12} /> Board
-              </button>
-            </div>
+        <div className="pointer-events-none relative z-20 mt-1">
+          <div className="pointer-events-auto">
+            <ErrorNote>{cardError}</ErrorNote>
           </div>
-
-          {view === "board" ? (
-            <ProjectBoard projectId={p.id} />
-          ) : (
-            <>
-          {/* --- Task composer ------------------------------------------------ */}
-          <section>
-            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
-              <Bot size={11} /> Run a task
-            </div>
-            <div className="space-y-2">
-              <textarea
-                value={taskText}
-                onChange={(e) => setTaskText(e.target.value)}
-                onKeyDown={(e) => {
-                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                    e.preventDefault();
-                    void onRun();
-                  }
-                }}
-                rows={2}
-                aria-label={`Task for an agent in ${p.name}`}
-                placeholder="Ask an agent to do something in this project… (e.g. 'summarize every PDF in here into one report')"
-                className="field resize-y text-sm"
-              />
-              <div className="flex flex-wrap items-center gap-2">
-                <select
-                  aria-label="Deliverable"
-                  value={taskOutput}
-                  onChange={(e) => setTaskOutput(e.target.value as TaskOutput)}
-                  className="field min-w-0 flex-1 text-sm"
-                >
-                  {TASK_OUTPUTS.map((o) => (
-                    <option
-                      key={o.value}
-                      value={o.value}
-                      disabled={o.value !== "chat" && !p.root}
-                    >
-                      {o.label}
-                    </option>
-                  ))}
-                </select>
-                {taskOutput !== "chat" && (
-                  <input
-                    value={taskFilename}
-                    onChange={(e) => setTaskFilename(e.target.value)}
-                    placeholder="filename (optional)"
-                    aria-label="Deliverable filename"
-                    className="field w-44 min-w-0 font-mono text-sm"
-                  />
-                )}
-                <button
-                  type="button"
-                  onClick={() => void onRun()}
-                  disabled={
-                    taskStarting ||
-                    planning ||
-                    pendingPlan !== null ||
-                    !taskText.trim()
-                  }
-                  title="Start an agent session on this task"
-                  className="btn-accent shrink-0"
-                >
-                  {taskStarting ? (
-                    <LoaderInline label="Starting…" />
-                  ) : planning ? (
-                    <LoaderInline label="Checking…" />
-                  ) : (
-                    <>
-                      <Send size={13} /> Run
-                    </>
-                  )}
-                </button>
-              </div>
-              {!p.root && (
-                <p className="text-[11px] text-zinc-600">
-                  A file deliverable needs the project to have a folder — this
-                  one has none, so only “Reply in chat” is available.
-                </p>
-              )}
-
-              {planning && (
-                <p className="text-[11px] text-zinc-500">
-                  Checking what this needs…
-                </p>
-              )}
-
-              {/* Bundled tool-permission grant — one confirm covers the task. */}
-              {pendingPlan && pendingPlan.tools.length > 0 && (
-                <div className="rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2.5">
-                  <div className="flex items-center gap-1.5 text-xs font-medium text-amber-200">
-                    <ShieldCheck size={13} /> This task will use these tools
-                  </div>
-                  <ul className="mt-2 space-y-1.5">
-                    {pendingPlan.tools.map((t) => (
-                      <li key={t.perm_key} className="flex items-start gap-2">
-                        <input
-                          type="checkbox"
-                          checked={checkedKeys[t.perm_key] ?? false}
-                          onChange={(e) =>
-                            setCheckedKeys((m) => ({
-                              ...m,
-                              [t.perm_key]: e.target.checked,
-                            }))
-                          }
-                          className="mt-0.5 shrink-0 accent-[color:var(--accent,#22d3ee)]"
-                          aria-label={`Allow ${t.name}`}
-                        />
-                        <div className="min-w-0">
-                          <div className="text-xs font-medium text-zinc-200">
-                            {t.name}
-                          </div>
-                          {t.why && (
-                            <div className="text-[11px] text-zinc-500">
-                              {t.why}
-                            </div>
-                          )}
-                        </div>
-                      </li>
-                    ))}
-                  </ul>
-                  {pendingPlan.note && (
-                    <p className="mt-2 text-[11px] text-zinc-500">
-                      {pendingPlan.note}
-                    </p>
-                  )}
-                  <div className="mt-2.5 flex items-center gap-2">
-                    <button
-                      type="button"
-                      onClick={confirmGrant}
-                      disabled={taskStarting}
-                      className="btn-accent"
-                    >
-                      {taskStarting ? (
-                        <LoaderInline label="Starting…" />
-                      ) : (
-                        <>
-                          <Check size={13} /> Allow all & run
-                        </>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      onClick={cancelGrant}
-                      disabled={taskStarting}
-                      className="btn-ghost"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              )}
-
-              {planNote && !pendingPlan && (
-                <p className="text-[11px] text-zinc-500">{planNote}</p>
-              )}
-
-              {taskError && <ErrorNote>{taskError}</ErrorNote>}
-
-              {taskRun && (
-                <div className="rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2">
-                  <div className="flex items-center justify-between gap-3">
-                    {!taskDone ? (
-                      <span className="text-xs text-zinc-400">
-                        <LoaderInline label="Agent working…" />
-                      </span>
-                    ) : (
-                      <Badge value={taskSession?.status ?? "unknown"} />
-                    )}
-                    <Link
-                      href={`/sessions/${encodeURIComponent(taskRun.id)}`}
-                      className="shrink-0 text-[11px] text-accent-soft transition-colors hover:text-accent"
-                    >
-                      open session →
-                    </Link>
-                  </div>
-
-                  {!taskDone && taskPollError && (
-                    <p className="mt-1.5 text-[11px] text-zinc-500">
-                      status check failed ({taskPollError}) — retrying…
-                    </p>
-                  )}
-
-                  {taskDone && taskSession?.status === "completed" && (
-                    <>
-                      {taskRun.output !== "chat" && taskRun.target_path && (
-                        <div className="mt-1.5 flex items-center gap-1.5 text-xs text-zinc-300">
-                          <span className="shrink-0 text-zinc-500">Saved:</span>
-                          <span
-                            className="min-w-0 truncate font-mono"
-                            title={taskRun.target_path}
-                          >
-                            {taskRun.target_path}
-                          </span>
-                        </div>
-                      )}
-                      {taskSession.summary ? (
-                        <div
-                          className={`mt-1.5 whitespace-pre-wrap text-xs text-zinc-300 ${
-                            taskRun.output === "chat"
-                              ? "max-h-56 overflow-y-auto"
-                              : "line-clamp-3"
-                          }`}
-                        >
-                          {taskSession.summary}
-                        </div>
-                      ) : (
-                        <p className="mt-1.5 text-xs text-zinc-500">
-                          The agent finished without a summary — open the
-                          session for the full transcript.
-                        </p>
-                      )}
-                    </>
-                  )}
-
-                  {taskDone && taskSession?.status !== "completed" && (
-                    <p className="mt-1.5 whitespace-pre-wrap text-xs text-rose-200">
-                      {taskSession?.summary ||
-                        `The session ${taskSession?.status} without a summary — open it for details.`}
-                    </p>
-                  )}
-
-                  {/* What the run PRODUCED — media as thumbs, else a chip. */}
-                  {taskDone && taskArtifacts && taskArtifacts.length > 0 && (
-                    <div className="mt-2.5 border-t hairline pt-2.5">
-                      <div className="mb-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
-                        Produced
-                      </div>
-                      <div className="flex flex-wrap gap-2">
-                        {taskArtifacts.map((a) =>
-                          a.media === "image" ? (
-                            <Link
-                              key={a.name}
-                              href="/creative"
-                              title={a.filename}
-                              className="block overflow-hidden rounded-lg border border-white/10 transition-colors hover:border-accent/40"
-                            >
-                              {/* eslint-disable-next-line @next/next/no-img-element */}
-                              <img
-                                src={mediaSrc(a.url)}
-                                alt={a.filename}
-                                className="h-14 w-14 object-cover"
-                              />
-                            </Link>
-                          ) : a.media === "video" ? (
-                            <Link
-                              key={a.name}
-                              href="/creative"
-                              title={a.filename}
-                              className="relative flex h-14 w-14 items-center justify-center rounded-lg border border-white/10 bg-black/40 transition-colors hover:border-accent/40"
-                            >
-                              <Play size={18} className="text-zinc-200" />
-                            </Link>
-                          ) : a.media === "audio" ? (
-                            <Link
-                              key={a.name}
-                              href="/creative"
-                              title={a.filename}
-                              className="inline-flex max-w-[12rem] items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.02] px-2.5 py-1.5 text-[11px] text-zinc-300 transition-colors hover:border-accent/40"
-                            >
-                              <Music size={12} className="shrink-0" />
-                              <span className="min-w-0 truncate font-mono">
-                                {a.filename}
-                              </span>
-                            </Link>
-                          ) : (
-                            <Link
-                              key={a.name}
-                              href="/creative"
-                              title={a.filename}
-                              className="inline-flex max-w-[12rem] items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.02] px-2.5 py-1.5 text-[11px] text-zinc-300 transition-colors hover:border-accent/40"
-                            >
-                              <Paperclip size={12} className="shrink-0" />
-                              <span className="min-w-0 truncate font-mono">
-                                {a.filename}
-                              </span>
-                            </Link>
-                          ),
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              )}
-            </div>
-          </section>
-
-          {/* --- Sessions ---------------------------------------------------- */}
-          <section>
-            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
-              <History size={11} /> Sessions
-            </div>
-            {detailLoading ? (
-              <Spinner label="Loading sessions…" />
-            ) : detailError ? (
-              <ErrorNote>{detailError}</ErrorNote>
-            ) : !detail || detail.sessions.length === 0 ? (
-              <div className="py-1 text-xs text-zinc-500">
-                No sessions in this project yet — make it active and start a chat.
-              </div>
-            ) : (
-              <ul className="space-y-1.5">
-                {detail.sessions.map((s) => (
-                  <li key={s.id}>
-                    <Link
-                      href={`/sessions/${encodeURIComponent(s.id)}`}
-                      className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2 transition-colors hover:border-accent/25 hover:bg-white/[0.04]"
-                    >
-                      <span className="min-w-0 truncate text-xs text-zinc-300">
-                        {s.task || s.id}
-                      </span>
-                      <span className="flex shrink-0 items-center gap-2">
-                        <Badge value={s.status} />
-                        <span className="text-[11px] text-zinc-600">
-                          {timeAgo(s.created_at)}
-                        </span>
-                      </span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          {/* --- Chat threads ------------------------------------------------ */}
-          <section>
-            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
-              <MessageSquare size={11} /> Chat threads
-            </div>
-            {threadsLoading ? (
-              <Spinner label="Loading chat threads…" />
-            ) : threadsError ? (
-              <ErrorNote>{threadsError}</ErrorNote>
-            ) : !threads || threads.length === 0 ? (
-              <div className="py-1 text-xs text-zinc-500">
-                No chat threads tagged yet — new chats tag the ACTIVE project
-                automatically.
-              </div>
-            ) : (
-              <ul className="space-y-1.5">
-                {threads.slice(0, HUB_LIMIT).map((t) => (
-                  <li key={t.id}>
-                    <Link
-                      href="/chat"
-                      title={`Open Chat — "${t.title || "Untitled chat"}" is in the threads sidebar`}
-                      className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2 transition-colors hover:border-accent/25 hover:bg-white/[0.04]"
-                    >
-                      <span className="min-w-0 truncate text-xs text-zinc-300">
-                        {t.title || "Untitled chat"}
-                      </span>
-                      <span className="shrink-0 text-[11px] text-zinc-600">
-                        {timeAgo(t.updated_at)}
-                      </span>
-                    </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-
-          {/* --- Workflow runs ----------------------------------------------- */}
-          <section>
-            <div className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
-              <Workflow size={11} /> Workflow runs
-            </div>
-            {runsLoading ? (
-              <Spinner label="Loading workflow runs…" />
-            ) : runsError ? (
-              <ErrorNote>{runsError}</ErrorNote>
-            ) : !runs || runs.length === 0 ? (
-              <div className="py-1 text-xs text-zinc-500">
-                No workflow runs in this project yet — runs started while it is
-                active land here.
-              </div>
-            ) : (
-              <ul className="space-y-1.5">
-                {runs.slice(0, HUB_LIMIT).map((r, i) => (
-                  <li
-                    key={r.id ?? `${r.workflow_name}-${i}`}
-                    className="flex items-center justify-between gap-3 rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2"
-                  >
-                    <span className="min-w-0 truncate text-xs text-zinc-300">
-                      {r.workflow_name || "—"}
-                    </span>
-                    <span className="flex shrink-0 items-center gap-2">
-                      <Badge value={r.status || "unknown"} />
-                      <span className="text-[11px] text-zinc-600">
-                        {timeAgo(r.started_at)}
-                      </span>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </section>
-            </>
-          )}
         </div>
       )}
-    </Card>
+    </div>
   );
 }
 
 export default function ProjectsPage() {
+  const router = useRouter();
   const { data, error, loading, reload } = useApi<{ projects: Project[] }>(
     "/projects",
   );
@@ -1087,32 +254,22 @@ export default function ProjectsPage() {
   const [rootPickerOpen, setRootPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
-  const [ok, setOk] = useState<string | null>(null);
 
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!name.trim()) return;
     setBusy(true);
     setFormError(null);
-    setOk(null);
     const body: Record<string, string> = { name: name.trim() };
     if (brief.trim()) body.brief = brief.trim();
     if (root.trim()) body.root = root.trim();
     try {
       const created = await post<Project>("/projects", body);
-      setOk(
-        created.active
-          ? `"${created.name}" created and set active — new chats now carry its context.`
-          : `Project "${created.name}" created.`,
-      );
-      setName("");
-      setBrief("");
-      setRoot("");
-      reload();
+      // Land the user straight in the new project's workspace.
+      router.push(`/projects/${encodeURIComponent(created.id)}`);
     } catch (err) {
       setFormError(errText(err));
-    } finally {
-      setBusy(false);
+      setBusy(false); // keep the form usable on failure (success navigates away)
     }
   }
 
@@ -1121,7 +278,7 @@ export default function ProjectsPage() {
       <Reveal>
         <PageHeader
           title="Projects"
-          subtitle="Each project is a workspace with its own brief and history. The active project's brief and recent activity are automatically given to every chat, session, and workflow, so everything stays on the same page."
+          subtitle="Each project is a workspace — instructions, knowledge, conversations, tasks and a board in one place."
         />
       </Reveal>
       {offline && (
@@ -1210,7 +367,6 @@ export default function ProjectsPage() {
                     </>
                   )}
                 </button>
-                {ok && <SuccessNote>{ok}</SuccessNote>}
                 {formError && <ErrorNote>{formError}</ErrorNote>}
               </form>
             </Card>
@@ -1219,17 +375,20 @@ export default function ProjectsPage() {
           <div className="lg:col-span-2">
             {loading && !data ? (
               <SkeletonRows rows={4} />
+            ) : error && !offline ? (
+              <Card>
+                <ErrorNote>{error.message}</ErrorNote>
+              </Card>
             ) : projects.length === 0 ? (
               <Card>
                 <Empty icon={<FolderKanban size={24} />}>
-                  No projects yet — create one and every chat, session, and
-                  workflow will share its context.
+                  No projects yet — create one to get a workspace.
                 </Empty>
               </Card>
             ) : (
               <div className="grid gap-4 xl:grid-cols-2">
                 {projects.map((p) => (
-                  <ProjectCard key={p.id} project={p} onChanged={reload} />
+                  <ProjectTile key={p.id} project={p} onChanged={reload} />
                 ))}
               </div>
             )}

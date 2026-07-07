@@ -10,10 +10,12 @@ from fastapi import FastAPI, HTTPException
 from sqlmodel import select
 from typing import Any
 
+from .. import app as _app
 from ..app import _agent_type, _session_view
 from ..schemas import (
     PROJECT_TASK_OUTPUTS,
     ProjectCreate,
+    ProjectKnowledgeBody,
     ProjectPatch,
     ProjectTaskBody,
     ToolPlanBody,
@@ -110,6 +112,12 @@ def register(app: FastAPI, d) -> None:
                 project.root = body.root.strip()
             if body.status is not None:
                 project.status = body.status
+            if body.instructions is not None:
+                project.instructions = body.instructions.strip()
+            if body.default_provider is not None:
+                project.default_provider = body.default_provider.strip()
+            if body.default_model is not None:
+                project.default_model = body.default_model.strip()
             db.add(project)
             db.commit()
             db.refresh(project)
@@ -168,6 +176,111 @@ def register(app: FastAPI, d) -> None:
         d._persist_config(["active_project_id"])
         return {"active_project_id": None}
 
+    @app.post("/projects/{project_id}/knowledge")
+    def add_project_knowledge(project_id: str, body: ProjectKnowledgeBody) -> dict[str, Any]:
+        """Add a knowledge item to a project — the Claude-Projects-style
+        grounding substrate. A pasted note (``text``) is stored verbatim; a file
+        (``content_b64``) is decoded, its text extracted server-side, and stored
+        (kind='file'). Every item is embedded on write and injected into this
+        project's chats/tasks. 400 if BOTH text and content_b64 are empty."""
+        import base64
+        import re
+        from pathlib import Path
+
+        from ...core.models import Project
+        from ...documents.readers import extract_text
+        from ...projects.knowledge import add_knowledge
+
+        with session_scope(d.platform.engine) as db:
+            if db.get(Project, project_id) is None:
+                raise HTTPException(status_code=404, detail="no such project")
+
+        b64 = (body.content_b64 or "").strip()
+        note = (body.text or "").strip()
+        if not b64 and not note:
+            raise HTTPException(
+                status_code=400, detail="text or content_b64 is required"
+            )
+
+        if b64:
+            # Reject an oversized upload BEFORE decoding so we never buffer the
+            # bytes (4/3 accounts for base64 expansion) — same guard as
+            # /documents/upload and /ltm/ingest-document.
+            approx_bytes = (len(b64) * 3) // 4
+            if approx_bytes > _app._MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=(
+                        f"file too large (~{approx_bytes // (1024 * 1024)} MB); "
+                        f"limit is {_app._MAX_UPLOAD_BYTES // (1024 * 1024)} MB"
+                    ),
+                )
+            try:
+                data = base64.b64decode(b64, validate=False)
+            except Exception as exc:  # noqa: BLE001
+                raise HTTPException(status_code=400, detail=f"invalid base64: {exc}")
+            if not data:
+                raise HTTPException(status_code=400, detail="empty file")
+            # extract_text dispatches by suffix, so the decoded bytes need to live
+            # in a real file with the original name/extension first.
+            safe = (
+                re.sub(r"[^A-Za-z0-9._-]", "_", body.filename or "").strip("._")
+                or "upload"
+            )
+            uploads = d.platform.config.home / "uploads"
+            uploads.mkdir(parents=True, exist_ok=True)
+            target = uploads / safe
+            target.write_bytes(data)
+            try:
+                extracted = (extract_text(target) or "").strip()
+            except Exception as exc:  # noqa: BLE001 — report the real reason, don't fabricate
+                raise HTTPException(
+                    status_code=400, detail=f"could not read {safe}: {exc}"
+                )
+            if not extracted:
+                raise HTTPException(
+                    status_code=400, detail=f"no extractable text in {safe}"
+                )
+            item_text = extracted
+            item_name = (body.name or body.filename or safe).strip() or safe
+            kind = "file"
+        else:
+            item_text = note
+            first_line = note.splitlines()[0] if note.splitlines() else note
+            item_name = (body.name or first_line).strip() or "note"
+            kind = "note"
+
+        try:
+            rec = add_knowledge(
+                d.platform, project_id, item_name, item_text, kind=kind
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return {"id": rec.id, "name": rec.name, "kind": rec.kind, "size": rec.size}
+
+    @app.get("/projects/{project_id}/knowledge")
+    def list_project_knowledge(project_id: str) -> dict[str, Any]:
+        """Metadata for every knowledge item in the project (newest first)."""
+        from ...core.models import Project
+        from ...projects.knowledge import list_knowledge
+
+        with session_scope(d.platform.engine) as db:
+            if db.get(Project, project_id) is None:
+                raise HTTPException(status_code=404, detail="no such project")
+        items = list_knowledge(d.platform, project_id)
+        return {"knowledge": items, "count": len(items)}
+
+    @app.delete("/projects/{project_id}/knowledge/{knowledge_id}")
+    def delete_project_knowledge(
+        project_id: str, knowledge_id: str
+    ) -> dict[str, Any]:
+        """Remove one knowledge item. 404 if it doesn't belong to the project."""
+        from ...projects.knowledge import remove_knowledge
+
+        if not remove_knowledge(d.platform, project_id, knowledge_id):
+            raise HTTPException(status_code=404, detail="no such knowledge item")
+        return {"deleted": knowledge_id}
+
     @app.post("/projects/{project_id}/task")
     async def run_project_task(project_id: str, body: ProjectTaskBody) -> dict[str, Any]:
         """Plain-text task INSIDE the project's folder, with a chosen
@@ -180,6 +293,7 @@ def register(app: FastAPI, d) -> None:
         from pathlib import Path
 
         from ...core.models import Project
+        from ...projects.knowledge import ground
 
         text = (body.text or "").strip()
         if not text:
@@ -215,6 +329,16 @@ def register(app: FastAPI, d) -> None:
                 "current directory. Read and create files here with plain "
                 "relative paths.",
             )
+        # Per-project custom instructions ride at the FRONT — a standing directive
+        # that applies to EVERY task in this project, before the task itself.
+        instructions = (project.instructions or "").strip()
+        if instructions:
+            lines.insert(0, f"Project instructions (follow these): {instructions}")
+        # Grounding: the project's knowledge base (whole base when small, else the
+        # query-relevant items). Empty => no block (degrades gracefully).
+        grounded = ground(d.platform, project.id, text)
+        if grounded.strip():
+            lines.append("Reference knowledge:\n" + grounded)
         target_path: str | None = None
         rel_name: str | None = None
         if output == "chat":
@@ -239,11 +363,17 @@ def register(app: FastAPI, d) -> None:
             "Work autonomously to completion — make reasonable choices instead "
             "of asking questions."
         )
+        # The task body carries no provider/model, so a project that pins its own
+        # default_provider/default_model steers every task it runs (None = the
+        # global default, i.e. the prior behavior).
+        provider = (project.default_provider or "").strip() or None
+        model = (project.default_model or "").strip() or None
         try:
             session = await d.orchestrator.create_session(
                 "\n".join(lines),
                 _agent_type("builder"),
-                None,
+                provider,
+                model=model,
                 project_id=project.id,
                 allow_tools=body.allow_tools or None,
                 workspace_root=str(root) if in_folder else None,

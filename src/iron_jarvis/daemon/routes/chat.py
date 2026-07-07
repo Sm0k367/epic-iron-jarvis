@@ -22,11 +22,18 @@ from ...core.models import AgentType
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/chat/threads")
-    def chat_threads() -> dict[str, Any]:
+    def chat_threads(project_id: str = "") -> dict[str, Any]:
+        """List saved threads (newest first). ``project_id`` (optional) scopes
+        the list to ONE project's conversations — the in-project workspace fetches
+        only its own threads; empty returns every thread (unchanged behavior)."""
         from ...core.models import ChatThreadRecord
 
+        pid = (project_id or "").strip()
         with session_scope(d.platform.engine) as db:
-            rows = list(db.exec(select(ChatThreadRecord)))
+            stmt = select(ChatThreadRecord)
+            if pid:
+                stmt = stmt.where(ChatThreadRecord.project_id == pid)
+            rows = list(db.exec(stmt))
         rows.sort(key=lambda r: r.updated_at, reverse=True)
         out = []
         for r in rows[:100]:
@@ -145,21 +152,44 @@ def register(app: FastAPI, d) -> None:
             "- You are the CHAT surface: answer directly. For multi-step jobs "
             "with tools, the user can switch this conversation to Agent mode."
         )
-        # Context spine: the active project rides along.
-        pid = getattr(d.platform.config, "active_project_id", None)
+        # Context spine: ground THIS turn in a SPECIFIC project (body.project_id)
+        # or fall back to the globally-active one. An in-project conversation
+        # carries its OWN instructions + brief + knowledge, independent of what's
+        # active elsewhere — explicit project_id always wins.
+        pid = (body.project_id or "").strip() or getattr(
+            d.platform.config, "active_project_id", None
+        )
+        resolved_proj = None
         if pid:
             try:
                 from ...core.models import Project
 
                 with session_scope(d.platform.engine) as db:
-                    proj = db.get(Project, pid)
-                if proj is not None:
-                    system += (
-                        f"\n\n# Project context\nActive project: {proj.name}."
-                        + (f" Brief: {proj.brief[:1500]}" if proj.brief else "")
-                    )
+                    resolved_proj = db.get(Project, pid)
             except Exception:  # noqa: BLE001 — never block a chat turn
+                resolved_proj = None
+        if resolved_proj is not None:
+            block = f"\n\n# Project: {resolved_proj.name}"
+            instructions = (resolved_proj.instructions or "").strip()
+            if instructions:
+                block += f"\n\nInstructions (follow these):\n{instructions[:2000]}"
+            if resolved_proj.brief:
+                block += f"\n\nAbout this project: {resolved_proj.brief[:1500]}"
+            # Knowledge keyed off THIS turn's question (the last user message);
+            # ground() retrieves the relevant items. Never let it break a turn.
+            query = next(
+                (m.content or "" for m in reversed(body.messages) if m.role == "user"),
+                "",
+            )
+            try:
+                from ...projects.knowledge import ground
+
+                knowledge = ground(d.platform, pid, query)
+                if knowledge:
+                    block += f"\n\nProject knowledge (reference):\n{knowledge}"
+            except Exception:  # noqa: BLE001 — retrieval must never break a chat turn
                 pass
+            system += block
 
         # Attachments: text formats extracted inline; images go to VISION.
         images: list[dict[str, str]] = []
@@ -237,11 +267,19 @@ def register(app: FastAPI, d) -> None:
                 + ". Use them when they help; answer directly when they don't."
             )
         overrides = {t: "allow" for t in armed}
+        # Routing: an explicit body choice always wins; otherwise fall back to
+        # the resolved project's per-project default model, if it has one.
+        provider_choice = (body.provider or "").strip() or (
+            (resolved_proj.default_provider or "").strip() if resolved_proj else ""
+        )
+        model_choice = (body.model or "").strip() or (
+            (resolved_proj.default_model or "").strip() if resolved_proj else ""
+        )
         try:
             for _round in range(4):
                 route = await d.platform.router.complete(
-                    provider=body.provider or None,
-                    model=body.model or None,
+                    provider=provider_choice or None,
+                    model=model_choice or None,
                     system=system,
                     messages=msgs,
                     tools=tool_specs,
