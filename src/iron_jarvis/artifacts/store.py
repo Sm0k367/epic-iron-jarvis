@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Callable
 
 from sqlalchemy import Engine
+from sqlmodel import select
 
 from ..core.db import session_scope
 from ..core.ids import utcnow
@@ -68,7 +69,11 @@ class ArtifactStore:
         if not base.is_dir():
             return []
         out: list[int] = []
-        for child in base.iterdir():
+        try:
+            children = list(base.iterdir())
+        except OSError:  # dir deleted mid-listing (concurrent delete()) = gone
+            return []
+        for child in children:
             if child.is_dir() and child.name.startswith("v"):
                 try:
                     out.append(int(child.name[1:]))
@@ -177,6 +182,38 @@ class ArtifactStore:
             size=st.st_size,
             created_at=datetime.fromtimestamp(st.st_mtime, tz=timezone.utc),
         )
+
+    def delete(self, name: str) -> bool:
+        """Remove EVERY stored version of ``name`` — its whole slug directory —
+        plus its :class:`ArtifactRecord` rows when an engine is present.
+
+        Returns True when something was actually removed (files or rows), False
+        when the name is unknown. Traversal-safe: the name is slugified into a
+        single path segment under root, same as every other lookup here.
+        """
+        import shutil
+
+        base = self._dir(name)
+        existed = base.is_dir()
+        if existed:
+            # Tolerate per-file failures (Windows: a version still open by a
+            # streaming FileResponse can't be unlinked) — remove what we can
+            # rather than aborting the whole delete on the first locked file.
+            # (onexc, not the 3.12-deprecated onerror; requires-python >= 3.12.)
+            shutil.rmtree(base, onexc=lambda fn, path, exc: None)
+
+        rows = 0
+        if self.engine is not None:
+            with session_scope(self.engine) as db:
+                records = list(
+                    db.exec(select(ArtifactRecord).where(ArtifactRecord.name == name))
+                )
+                for record in records:
+                    db.delete(record)
+                rows = len(records)
+                db.commit()
+
+        return existed or rows > 0
 
     def list_names(self) -> list[str]:
         """Return the sorted (slugified) names of all stored artifacts."""

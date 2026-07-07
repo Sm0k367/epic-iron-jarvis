@@ -186,6 +186,67 @@ def test_thumbnail_endpoint_images_and_fallbacks(tmp_path, monkeypatch):
     assert client.get(f"/creative/thumb?path={txt}").status_code == 415
 
 
+def test_thumbnail_concurrent_requests_one_cache_entry(tmp_path):
+    """Stampede regression: 8 simultaneous requests for the SAME fresh image
+    must all succeed with identical bytes and leave exactly ONE cached .jpg —
+    no torn reads, no .tmp leftovers (generation is tmp-file + os.replace,
+    bounded by the render semaphore)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from PIL import Image
+
+    client = TestClient(create_app(str(tmp_path)))
+    src = tmp_path / "fresh.png"
+    Image.new("RGB", (1400, 900), (40, 120, 240)).save(src)
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        results = list(pool.map(lambda _: client.get(f"/creative/thumb?path={src}"), range(8)))
+
+    assert all(r.status_code == 200 for r in results)
+    assert len({r.content for r in results}) == 1  # every reader saw a complete file
+
+    cache = tmp_path / ".ironjarvis" / "creative-thumbs"
+    assert len(list(cache.glob("*.jpg"))) == 1
+    assert not [p for p in cache.iterdir() if ".tmp." in p.name]  # no leftovers
+
+
+def test_publish_endpoint_caps_file_size(tmp_path, monkeypatch):
+    """A local file over the publish cap is refused with 413 BEFORE its bytes
+    are buffered (the cap is shared with PixioUploadTool and read at call time,
+    so shrinking it here exercises the real path)."""
+    monkeypatch.setenv("PIXIO_API_KEY", "pxio_live_test")
+    monkeypatch.setattr(PixioUploadTool, "_MAX_UPLOAD", 16)
+    client = TestClient(create_app(str(tmp_path)))
+    big = tmp_path / "big.png"
+    big.write_bytes(_PNG)  # well over the 16-byte test cap
+
+    r = client.post("/creative/publish", json={"path": str(big)})
+    assert r.status_code == 413
+    assert r.json()["detail"] == "file too large to publish (200MB max)"
+
+
+def test_gallery_delete_removes_artifact_and_404s_after(tmp_path):
+    client = TestClient(create_app(str(tmp_path)))
+    up = client.post(
+        "/creative/upload",
+        json={"filename": "gone.png", "content_b64": base64.b64encode(_PNG).decode()},
+    )
+    assert up.status_code == 200
+    name = up.json()["name"]
+    assert client.get(f"/creative/file/{name}").status_code == 200
+
+    r = client.delete(f"/creative/items/{name}")
+    assert r.status_code == 200 and r.json() == {"deleted": name}
+
+    # Gallery empty, serving 404s, and the bytes are actually gone from disk.
+    assert client.get("/creative/items").json() == {"items": [], "count": 0}
+    assert client.get(f"/creative/file/{name}").status_code == 404
+    assert not (tmp_path / ".ironjarvis" / "artifacts" / name).exists()
+
+    # Deleting again is an honest 404, not a silent success.
+    assert client.delete(f"/creative/items/{name}").status_code == 404
+
+
 def test_thumbnail_endpoint_artifact_name(tmp_path):
     import base64 as _b64
 

@@ -86,6 +86,45 @@ def test_tail_reports_mode_fields(tmp_path):
         client.delete(f"/terminals/{tid}")
 
 
+def test_automode_stops_once_user_has_spoken():
+    """Regression: the Shift+Tab automode thread must bail the moment the user
+    types a brief (studio_say sets _studio_said) — a late cycle would flip
+    Claude into plan mode mid-run. Must return immediately: no keystrokes, no
+    boot-wait sleeping."""
+    import time
+
+    from iron_jarvis.daemon.routes.creative import _engage_claude_automode
+
+    class _FakeSession:
+        _studio_said = True  # the user already spoke
+        alive = True
+
+        def __init__(self):
+            self.writes: list[str] = []
+
+        def output_tail(self) -> str:
+            return "? for shortcuts"  # booted TUI — cycling WOULD start otherwise
+
+        def write(self, data) -> None:
+            self.writes.append(data)
+
+    session = _FakeSession()
+    start = time.monotonic()
+    _engage_claude_automode(session)
+    assert session.writes == []  # not a single Shift+Tab
+    assert time.monotonic() - start < 1.0  # returned immediately, no waiting
+
+
+def test_fs_mkdir_refuses_protected_secrets_dir(tmp_path):
+    """A mkdir is a WRITE — it must be refused inside the protected roots the
+    platform registers at boot (the secrets/key dirs), not just reads."""
+    client = TestClient(create_app(str(tmp_path)))
+    target = tmp_path / ".ironjarvis" / "secrets" / "sneaky"
+    r = client.post("/fs/mkdir", json={"path": str(target)})
+    assert r.status_code == 403
+    assert not target.exists()
+
+
 def test_fs_mkdir_creates_subfolder_with_guards(tmp_path):
     client = TestClient(create_app(str(tmp_path)))
     target = tmp_path / "renders"

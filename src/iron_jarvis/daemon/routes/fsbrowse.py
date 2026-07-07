@@ -10,7 +10,7 @@ from fastapi import FastAPI, HTTPException
 from typing import Any
 
 from ..schemas import FsMkdirBody
-from ...core.fs_policy import fs_read_ok
+from ...core.fs_policy import fs_read_ok, is_protected_path
 
 
 def register(app: FastAPI, d) -> None:
@@ -24,6 +24,14 @@ def register(app: FastAPI, d) -> None:
         p = Path((body.path or "").strip())
         if not p.is_absolute():
             raise HTTPException(status_code=400, detail="absolute path required")
+        # WRITE-side guard: mkdir MODIFIES the tree, so an explicit protected-
+        # root refusal (secrets vault / key dirs) comes first with an honest
+        # write-flavored error; fs_read_ok below still covers the allowlist.
+        if is_protected_path(p):
+            raise HTTPException(
+                status_code=403,
+                detail="refusing to create a folder inside a protected secrets/key directory",
+            )
         ok, reason = fs_read_ok(str(p))
         if not ok:
             raise HTTPException(status_code=403, detail=reason)

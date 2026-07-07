@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import threading
 from pathlib import Path
 from typing import Any
 
@@ -52,6 +53,10 @@ class TerminalSession:
         self.created_at = utcnow()
         self.backend: PtyBackend = backend if backend is not None else default_backend()
         self._started = False
+        # Serializes write(): the WS handler, the studio /say endpoint, and the
+        # studio automode background thread all type into the same PTY — without
+        # a lock a Shift+Tab keystroke can land in the middle of a typed brief.
+        self._write_lock = threading.Lock()
         # Bounded tail of recent output — context for the per-terminal AI assist.
         self._tail = bytearray()
         # True when we fell back to a pipe-based shell (no real TTY) because the
@@ -67,7 +72,8 @@ class TerminalSession:
         return self
 
     def write(self, data: str | bytes) -> None:
-        self.backend.write(data)
+        with self._write_lock:  # one writer at a time — keystrokes never interleave
+            self.backend.write(data)
 
     def read(self, max_bytes: int = 65536) -> bytes:
         """Non-blocking read of pending output (``b""`` if nothing ready)."""

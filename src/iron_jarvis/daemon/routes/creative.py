@@ -62,6 +62,10 @@ def _engage_claude_automode(session) -> None:
 
     deadline = time.time() + 45
     while time.time() < deadline:  # wait for the TUI to come up
+        # Once the user has spoken, STOP: a late Shift+Tab could cycle Claude
+        # into plan mode in the middle of a running brief. (studio_say sets it.)
+        if getattr(session, "_studio_said", False):
+            return
         if not session.alive:
             return
         tail = session.output_tail()
@@ -69,6 +73,8 @@ def _engage_claude_automode(session) -> None:
             break
         time.sleep(1.0)
     for _ in range(6):  # cycle until an autopilot mode is the latest banner
+        if getattr(session, "_studio_said", False):
+            return  # the user is typing/running — never keystroke over them
         if not session.alive or time.time() > deadline + 30:
             return
         if latest_claude_mode(session.output_tail()) in (
@@ -109,6 +115,15 @@ def register(app: FastAPI, d) -> None:
         """The gallery: every media artifact, newest first."""
         items = list_media(d.platform, limit=limit)
         return {"items": items, "count": len(items)}
+
+    @app.delete("/creative/items/{name}")
+    def creative_delete(name: str) -> dict[str, Any]:
+        """Remove a gallery artifact for good — every stored version plus its
+        records. GALLERY ARTIFACTS ONLY: there is deliberately no delete-by-
+        filesystem-path anywhere in the daemon."""
+        if not d.platform.artifacts.delete(name):
+            raise HTTPException(status_code=404, detail="no such media")
+        return {"deleted": name}
 
     @app.get("/creative/file/{name}")
     def creative_file(name: str, version: int | None = None):
@@ -175,7 +190,7 @@ def register(app: FastAPI, d) -> None:
         remote url to mirror. Honest 424 when Pixio isn't connected."""
         import asyncio
 
-        from ...tools.pixio import pixio_publish
+        from ...tools.pixio import PixioUploadTool, pixio_publish
 
         key = _pixio_key()
         if not key:
@@ -207,6 +222,13 @@ def register(app: FastAPI, d) -> None:
                 raise HTTPException(
                     status_code=415,
                     detail="only image/video/audio may be published to the public CDN",
+                )
+            # Same cap as the pixio_upload TOOL — read_bytes() below buffers the
+            # whole file in RAM, so refuse before reading. Class attr resolved at
+            # call time so tests can shrink it.
+            if p.stat().st_size > PixioUploadTool._MAX_UPLOAD:
+                raise HTTPException(
+                    status_code=413, detail="file too large to publish (200MB max)"
                 )
             url = await asyncio.to_thread(
                 pixio_publish,
@@ -293,6 +315,10 @@ def register(app: FastAPI, d) -> None:
                 "complete — make reasonable creative choices instead of asking me "
                 f"questions. Here is the brief: {text}"
             )
+        # The user has spoken — flag the session so the automode thread stops
+        # cycling Shift+Tab (a late cycle would flip Claude into plan mode
+        # mid-run). Set BEFORE the write so the thread can't sneak in between.
+        setattr(session, "_studio_said", True)
         session.write(text + "\r")
         return {"typed": True, "chars": len(text)}
 

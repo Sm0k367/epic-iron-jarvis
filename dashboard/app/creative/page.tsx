@@ -22,6 +22,8 @@ import {
   X,
   ArrowRight,
   ArrowUp,
+  ChevronLeft,
+  ChevronRight,
   ExternalLink,
   Folder,
   FolderOpen,
@@ -32,11 +34,13 @@ import {
   MessageCircle,
   Play,
   Rocket,
+  Search,
   Send,
   Share2,
   Square,
   Star,
   Terminal,
+  Trash2,
   Wand2,
 } from "lucide-react";
 import { API_BASE, ApiError, del, get, ijToken, post } from "@/lib/api";
@@ -613,6 +617,10 @@ function MediaLightbox({
   publishBody,
   meta,
   onClose,
+  deleteName,
+  onDeleted,
+  onPrev,
+  onNext,
 }: {
   media: MediaKind;
   src: string;
@@ -621,20 +629,97 @@ function MediaLightbox({
   publishBody: Record<string, string>;
   meta: ReactNode;
   onClose: () => void;
+  /** CREATIONS only: artifact name for DELETE /creative/items/{name}. Never set for path-based (library/studio) items. */
+  deleteName?: string;
+  /** Called after a successful delete — the caller closes the lightbox and reloads. */
+  onDeleted?: () => void;
+  /** Prev/next within the caller's filtered+sorted visible list: null at the ends, undefined = no navigation. */
+  onPrev?: (() => void) | null;
+  onNext?: (() => void) | null;
 }) {
   const [pubBusy, setPubBusy] = useState(false);
   const [pubUrl, setPubUrl] = useState<string | null>(null);
   const [pubErr, setPubErr] = useState<{ detail: string; notConnected: boolean } | null>(null);
   const [shareOpen, setShareOpen] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  const [delBusy, setDelBusy] = useState(false);
+  const [delErr, setDelErr] = useState<string | null>(null);
   const downloadRef = useRef<HTMLAnchorElement | null>(null);
+  const dialogRef = useRef<HTMLDivElement | null>(null);
 
+  // Esc closes; ←/→ step through the caller's visible list (never while typing).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        onClose();
+        return;
+      }
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT") return;
+      if (e.key === "ArrowLeft" && onPrev) onPrev();
+      else if (e.key === "ArrowRight" && onNext) onNext();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  }, [onClose, onPrev, onNext]);
+
+  // Body scroll lock while the dialog is open (restored on close/unmount).
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, []);
+
+  // Initial focus into the dialog; focus returns to the opener on close.
+  useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    dialogRef.current?.focus();
+    return () => opener?.focus();
+  }, []);
+
+  /** Minimal focus trap: Tab / Shift+Tab wrap within the dialog. */
+  const trapTab = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (e.key !== "Tab") return;
+    const root = dialogRef.current;
+    if (!root) return;
+    const focusables = Array.from(
+      root.querySelectorAll<HTMLElement>(
+        'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), audio[controls], video[controls], [tabindex]:not([tabindex="-1"])',
+      ),
+    );
+    if (focusables.length === 0) {
+      e.preventDefault();
+      return;
+    }
+    const first = focusables[0];
+    const last = focusables[focusables.length - 1];
+    const active = document.activeElement;
+    if (e.shiftKey) {
+      if (active === first || active === root) {
+        e.preventDefault();
+        last.focus();
+      }
+    } else if (active === last) {
+      e.preventDefault();
+      first.focus();
+    }
+  };
+
+  const doDelete = async () => {
+    if (!deleteName || delBusy) return;
+    setDelBusy(true);
+    setDelErr(null);
+    try {
+      await del<{ deleted: string }>(`/creative/items/${encodeURIComponent(deleteName)}`);
+      onDeleted?.(); // closes the lightbox + reloads — no state reset needed here
+    } catch (e) {
+      const err = e instanceof ApiError ? e : new ApiError(String(e), 0);
+      setDelErr(err.status === 0 ? "Daemon offline — could not delete." : err.message);
+      setDelBusy(false);
+    }
+  };
 
   const publish = async () => {
     setPubBusy(true);
@@ -662,25 +747,54 @@ function MediaLightbox({
       aria-modal="true"
       aria-label={title}
       onClick={onClose}
+      onKeyDown={trapTab}
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
     >
       <div
+        ref={dialogRef}
+        tabIndex={-1}
         onClick={(e) => e.stopPropagation()}
-        className="card-surface flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden"
+        className="card-surface flex max-h-[90vh] w-full max-w-3xl flex-col overflow-hidden focus:outline-none"
       >
         <header className="flex items-center justify-between gap-3 border-b hairline px-5 py-3.5">
           <h2 className="flex min-w-0 items-center gap-2 text-[13px] font-semibold tracking-wide text-zinc-200">
             <span className="shrink-0 text-accent-soft/80">{mediaIcon(media, 15)}</span>
             <span className="truncate">{title}</span>
           </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label="Close"
-            className="shrink-0 rounded-lg border border-transparent p-1.5 text-zinc-400 transition-colors hover:border-white/10 hover:bg-white/[0.04] hover:text-zinc-200"
-          >
-            <X size={16} />
-          </button>
+          <span className="flex shrink-0 items-center gap-1">
+            {(onPrev !== undefined || onNext !== undefined) && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => onPrev?.()}
+                  disabled={!onPrev}
+                  aria-label="Previous item"
+                  title="Previous (←)"
+                  className="rounded-lg border border-transparent p-1.5 text-zinc-400 transition-colors hover:border-white/10 hover:bg-white/[0.04] hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => onNext?.()}
+                  disabled={!onNext}
+                  aria-label="Next item"
+                  title="Next (→)"
+                  className="rounded-lg border border-transparent p-1.5 text-zinc-400 transition-colors hover:border-white/10 hover:bg-white/[0.04] hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-30"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </>
+            )}
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label="Close"
+              className="rounded-lg border border-transparent p-1.5 text-zinc-400 transition-colors hover:border-white/10 hover:bg-white/[0.04] hover:text-zinc-200"
+            >
+              <X size={16} />
+            </button>
+          </span>
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto">
@@ -743,7 +857,44 @@ function MediaLightbox({
               >
                 <Download size={13} /> Download
               </a>
+              {deleteName !== undefined && !confirmDel && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setConfirmDel(true);
+                    setDelErr(null);
+                  }}
+                  className="ml-auto inline-flex items-center gap-1.5 rounded-xl border border-rose-500/25 bg-rose-500/[0.06] px-3 py-1.5 text-xs font-medium text-rose-300 transition-colors hover:bg-rose-500/[0.12]"
+                >
+                  <Trash2 size={13} /> Delete
+                </button>
+              )}
             </div>
+
+            {deleteName !== undefined && confirmDel && (
+              <div className="flex flex-wrap items-center gap-2 rounded-xl border border-rose-500/25 bg-rose-500/[0.06] px-3 py-2">
+                <p className="min-w-0 flex-1 text-xs text-rose-200">
+                  Delete this creation? The file and all its versions are removed.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void doDelete()}
+                  disabled={delBusy}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-rose-500/40 bg-rose-500/[0.14] px-2.5 py-1 text-[11px] font-semibold text-rose-200 transition-colors hover:bg-rose-500/[0.22] disabled:opacity-50"
+                >
+                  {delBusy ? <LoaderInline label="Deleting…" /> : "Confirm"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirmDel(false)}
+                  disabled={delBusy}
+                  className="shrink-0 rounded-lg border border-white/10 px-2.5 py-1 text-[11px] font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.04] disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+            {delErr && <ErrorNote>{delErr}</ErrorNote>}
 
             {pubUrl && <PublicUrlBox url={pubUrl} autoCopy />}
             {shareOpen && pubUrl && (
@@ -845,6 +996,8 @@ interface StudioSession {
   terminal_id: string;
   dest: string;
   cli_label: string;
+  /** The skill chosen at start ("Auto" when the agent picks) — shown in the live header. */
+  skill?: string;
   command: string;
   sent_first: boolean;
   /** Media filenames already in the destination when the session started. */
@@ -927,6 +1080,8 @@ interface LiveSession {
   terminalId: string;
   dest: string;
   cliLabel: string;
+  /** Skill chosen at start ("Auto" when the agent picks); null for legacy stored sessions. */
+  skillLabel: string | null;
   command: string;
   /** Epoch ms — drives the "auto mode: engaging…" grace window on the badge. */
   startedAt: number;
@@ -1050,6 +1205,8 @@ function StudioView({
   // LIVE phase state.
   const [session, setSession] = useState<LiveSession | null>(null);
   const [resumeOffer, setResumeOffer] = useState<StudioSession | null>(null);
+  // Honest banner: the stored session's terminal is gone (daemon restart etc.).
+  const [lostNote, setLostNote] = useState(false);
   const [startBusy, setStartBusy] = useState(false);
   const [startErr, setStartErr] = useState<{ detail: string; installUrl: string | null } | null>(
     null,
@@ -1085,11 +1242,18 @@ function StudioView({
       .then((t) => {
         if (cancelled) return;
         if (t.alive) setResumeOffer(saved);
-        else writeStudioStore({ session: undefined }); // exited — nothing to resume
+        else {
+          // Exited — nothing to resume; say so instead of silently clearing.
+          writeStudioStore({ session: undefined });
+          setLostNote(true);
+        }
       })
       .catch((e: unknown) => {
         if (cancelled) return;
-        if (e instanceof ApiError && e.status === 404) writeStudioStore({ session: undefined });
+        if (e instanceof ApiError && e.status === 404) {
+          writeStudioStore({ session: undefined });
+          setLostNote(true);
+        }
         // Offline/transient errors: keep the stored session for the next visit.
       });
     return () => {
@@ -1234,10 +1398,12 @@ function StudioView({
         autopilot,
       });
       const engine = clis.find((c) => c.id === cli);
+      const skillLabel = skill || "Auto";
       const live: LiveSession = {
         terminalId: res.terminal_id,
         dest: res.cwd || chosenDir,
         cliLabel: engine?.label ?? cli,
+        skillLabel,
         command: res.command,
         startedAt: Date.now(),
       };
@@ -1250,6 +1416,7 @@ function StudioView({
           terminal_id: live.terminalId,
           dest: live.dest,
           cli_label: live.cliLabel,
+          skill: skillLabel,
           command: live.command,
           sent_first: false,
           baseline,
@@ -1279,6 +1446,7 @@ function StudioView({
       terminalId: resumeOffer.terminal_id,
       dest: resumeOffer.dest,
       cliLabel: resumeOffer.cli_label,
+      skillLabel: resumeOffer.skill ?? null, // legacy stored sessions predate the field
       command: resumeOffer.command,
       startedAt: resumeOffer.started_at,
     });
@@ -1348,6 +1516,18 @@ function StudioView({
               <Terminal size={15} className="text-accent-soft/80" />
               {session.cliLabel}
             </span>
+            {session.skillLabel && (
+              <span
+                title={`Skill: ${session.skillLabel}`}
+                className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-zinc-400"
+              >
+                <span aria-hidden="true" className="text-zinc-600">
+                  ·
+                </span>
+                <Wand2 size={12} className="text-accent-soft/70" aria-hidden="true" />
+                {session.skillLabel}
+              </span>
+            )}
             <code
               className="max-w-[18rem] truncate rounded bg-black/40 px-2 py-0.5 font-mono text-[11px] text-zinc-400"
               title={session.command}
@@ -1622,6 +1802,25 @@ function StudioView({
   const chosenSkill = skill ? mediaSkills.find((s) => s.name === skill) : undefined;
   return (
     <>
+      {lostNote && (
+        <Reveal>
+          <div className="flex items-start gap-3 rounded-xl border border-amber-500/25 bg-amber-500/[0.06] px-4 py-2.5">
+            <p className="min-w-0 flex-1 text-xs text-amber-200">
+              Your previous studio session ended (the daemon may have restarted). The terminal
+              and its output are gone; your media is still in the destination folder.
+            </p>
+            <button
+              type="button"
+              onClick={() => setLostNote(false)}
+              aria-label="Dismiss"
+              title="Dismiss"
+              className="shrink-0 rounded-lg border border-transparent p-1 text-amber-200/70 transition-colors hover:border-white/10 hover:bg-white/[0.04] hover:text-amber-100"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        </Reveal>
+      )}
       <Reveal>
         <Card title="1 · Engine" icon={<Terminal size={15} />}>
           <div className="space-y-3">
@@ -1924,6 +2123,47 @@ const FILTERS: { key: Filter; label: string }[] = [
   { key: "audio", label: "Audio" },
 ];
 
+/* ---- Sort + search (client-side, per view) ---- */
+
+type SortKey = "newest" | "oldest" | "name";
+
+const SORTS: { key: SortKey; label: string }[] = [
+  { key: "newest", label: "Newest" },
+  { key: "oldest", label: "Oldest" },
+  { key: "name", label: "Name A–Z" },
+];
+
+// Folder listings carry NO timestamps (/fs/list has no mtime) — offering
+// "Newest" there would silently sort by name and lie. Library gets honest
+// name orders only ("newest" key doubles as the Z–A mapping in sortLibrary).
+const LIB_SORTS: { key: SortKey; label: string }[] = [
+  { key: "name", label: "Name A–Z" },
+  { key: "newest", label: "Name Z–A" },
+];
+
+/** Numeric-aware, case-insensitive filename comparator ("shot 2" < "shot 10"). */
+const nameCmp = new Intl.Collator(undefined, { numeric: true, sensitivity: "base" }).compare;
+
+function sortCreations(list: CreativeItem[], sort: SortKey): CreativeItem[] {
+  const out = [...list];
+  if (sort === "name") out.sort((a, b) => nameCmp(a.filename, b.filename));
+  else if (sort === "oldest") out.sort((a, b) => a.created_at.localeCompare(b.created_at));
+  else out.sort((a, b) => b.created_at.localeCompare(a.created_at));
+  return out;
+}
+
+/**
+ * Library entries carry no timestamp (FsEntry has name/size only), so
+ * Newest/Oldest fall back to natural-name order — generated media embeds
+ * sequence numbers/timestamps in filenames, which this tracks honestly.
+ */
+function sortLibrary(list: LibraryFile[], sort: SortKey): LibraryFile[] {
+  const out = [...list];
+  if (sort === "newest") out.sort((a, b) => nameCmp(b.name, a.name));
+  else out.sort((a, b) => nameCmp(a.name, b.name)); // oldest + name A–Z
+  return out;
+}
+
 const VIEWS: { id: View; label: string; icon: ReactNode }[] = [
   { id: "creations", label: "Creations", icon: <Sparkles size={14} /> },
   { id: "library", label: "Library", icon: <FolderOpen size={14} /> },
@@ -1938,10 +2178,17 @@ export default function CreativePage() {
   const [selected, setSelected] = useState<CreativeItem | null>(null);
   const closeLightbox = useCallback(() => setSelected(null), []);
 
+  // Sort + search — each view keeps its own state.
+  const [creSort, setCreSort] = useState<SortKey>("newest");
+  const [creQuery, setCreQuery] = useState("");
+  const [libSort, setLibSort] = useState<SortKey>("name");
+  const [libQuery, setLibQuery] = useState("");
+
   // View switcher — SSR-safe: default Creations, hydrate from localStorage in an
   // effect (this page is statically prerendered, so no lazy-initializer reads).
   const [view, setView] = useState<View>("creations");
   const [libDir, setLibDir] = useState<string | null>(null);
+  const [libSelected, setLibSelected] = useState<LibraryFile | null>(null);
   const [pins, setPins] = useState<PinnedFolder[]>([]);
   useEffect(() => {
     try {
@@ -1957,6 +2204,9 @@ export default function CreativePage() {
 
   const switchView = (next: View) => {
     setView(next);
+    // An open lightbox must not survive a tab switch with stale content.
+    setSelected(null);
+    setLibSelected(null);
     try {
       window.localStorage.setItem(VIEW_KEY, next);
     } catch {
@@ -1991,7 +2241,11 @@ export default function CreativePage() {
   const [listing, setListing] = useState<FsListing | null>(null);
   const [libLoading, setLibLoading] = useState(false);
   const [libError, setLibError] = useState<ApiError | null>(null);
-  const [libSelected, setLibSelected] = useState<LibraryFile | null>(null);
+  // Incremental render cap ("Show more") — resets when the folder changes.
+  const [libCap, setLibCap] = useState(LIB_RENDER_CAP);
+  useEffect(() => {
+    setLibCap(LIB_RENDER_CAP);
+  }, [libDir]);
 
   useEffect(() => {
     if (view !== "library" || libDir === null) return;
@@ -2041,40 +2295,119 @@ export default function CreativePage() {
   const [uploadErr, setUploadErr] = useState<string | null>(null);
   const [uploadUrl, setUploadUrl] = useState<string | null>(null);
 
-  const onFile = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    e.target.value = ""; // allow re-picking the same file
-    if (!file) return;
-    setUploadOk(null);
-    setUploadErr(null);
-    setUploadUrl(null);
-    if (file.size > MAX_UPLOAD_BYTES) {
-      setUploadErr(
-        `"${file.name}" is ${formatSize(file.size)} — uploads are capped around 100 MB. Try a smaller file.`,
-      );
-      return;
-    }
-    setUploading(true);
-    try {
-      const content_b64 = await readAsBase64(file);
-      const res = await post<UploadResult>("/creative/upload", {
-        filename: file.name,
-        content_b64,
-        ...(alsoPublish ? { publish: true } : {}),
-      });
-      setUploadOk(`Uploaded ${file.name} (${formatSize(res.size)}).`);
-      if (res.url) setUploadUrl(res.url);
-      if (res.publish_error) setUploadErr(`Upload saved, but publishing failed: ${res.publish_error}`);
-      reload();
-    } catch (err) {
-      const ae = err instanceof ApiError ? err : new ApiError(String(err), 0);
-      setUploadErr(ae.status === 0 ? "Daemon offline — could not upload." : ae.message);
-    } finally {
+  /**
+   * THE upload path — the picker and drag-and-drop both land here. Uploads up
+   * to 5 files sequentially, keeping every guard (size cap, offline handling,
+   * publish errors). `extraErrs` carries pre-flight rejections (non-media drops).
+   */
+  const uploadFiles = useCallback(
+    async (files: File[], extraErrs: string[] = []) => {
+      if (uploading) return;
+      setUploadOk(null);
+      setUploadErr(null);
+      setUploadUrl(null);
+      const errs = [...extraErrs];
+      const batch = files.slice(0, 5);
+      if (batch.length === 0) {
+        if (errs.length > 0) setUploadErr(errs.join(" "));
+        return;
+      }
+      setUploading(true);
+      const oks: string[] = [];
+      let lastUrl: string | null = null;
+      let uploadedAny = false;
+      for (const file of batch) {
+        if (file.size > MAX_UPLOAD_BYTES) {
+          errs.push(`"${file.name}" (${formatSize(file.size)}) exceeds the 100 MB upload limit.`);
+          continue;
+        }
+        try {
+          const content_b64 = await readAsBase64(file);
+          const res = await post<UploadResult>("/creative/upload", {
+            filename: file.name,
+            content_b64,
+            ...(alsoPublish ? { publish: true } : {}),
+          });
+          uploadedAny = true;
+          oks.push(`${file.name} (${formatSize(res.size)})`);
+          if (res.url) lastUrl = res.url;
+          if (res.publish_error)
+            errs.push(`${file.name}: upload saved, but publishing failed: ${res.publish_error}`);
+        } catch (err) {
+          const ae = err instanceof ApiError ? err : new ApiError(String(err), 0);
+          if (ae.status === 0) {
+            errs.push("Daemon offline — could not upload.");
+            break; // no point retrying the rest of the batch
+          }
+          errs.push(`"${file.name}": ${ae.message}`);
+        }
+      }
+      if (oks.length > 0)
+        setUploadOk(
+          oks.length === 1 ? `Uploaded ${oks[0]}.` : `Uploaded ${oks.length} files: ${oks.join(", ")}.`,
+        );
+      if (lastUrl) setUploadUrl(lastUrl);
+      if (errs.length > 0) setUploadErr(errs.join(" "));
+      if (uploadedAny) reload();
       setUploading(false);
-    }
+    },
+    [uploading, alsoPublish, reload],
+  );
+
+  const onFile = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files ?? []);
+    e.target.value = ""; // allow re-picking the same file
+    void uploadFiles(files);
   };
 
-  const items = data?.items ?? [];
+  // Drag-and-drop upload (Creations + Library views): drop anywhere on the page.
+  const dragDepth = useRef(0);
+  const [dragActive, setDragActive] = useState(false);
+  useEffect(() => {
+    if (view === "create") return; // the studio view is not a drop target
+    const hasFiles = (e: DragEvent) => Array.from(e.dataTransfer?.types ?? []).includes("Files");
+    const onDragEnter = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current += 1;
+      setDragActive(true);
+    };
+    const onDragOver = (e: DragEvent) => {
+      if (hasFiles(e)) e.preventDefault(); // required, or the browser opens the file
+    };
+    const onDragLeave = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      dragDepth.current = Math.max(0, dragDepth.current - 1);
+      if (dragDepth.current === 0) setDragActive(false);
+    };
+    const onDrop = (e: DragEvent) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current = 0;
+      setDragActive(false);
+      const all = Array.from(e.dataTransfer?.files ?? []);
+      if (all.length === 0) return;
+      const media = all.filter((f) => mediaKindOf(f.name) !== null);
+      const rejected = all
+        .filter((f) => mediaKindOf(f.name) === null)
+        .map((f) => `"${f.name}" isn't a supported media type — images, video, and audio only.`);
+      void uploadFiles(media, rejected);
+    };
+    window.addEventListener("dragenter", onDragEnter);
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragleave", onDragLeave);
+    window.addEventListener("drop", onDrop);
+    return () => {
+      window.removeEventListener("dragenter", onDragEnter);
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragleave", onDragLeave);
+      window.removeEventListener("drop", onDrop);
+      dragDepth.current = 0;
+      setDragActive(false);
+    };
+  }, [view, uploadFiles]);
+
+  const items = useMemo(() => data?.items ?? [], [data]);
 
   // Library derived data (current folder only).
   const folders = useMemo(() => (listing?.entries ?? []).filter((e) => e.is_dir), [listing]);
@@ -2088,21 +2421,54 @@ export default function CreativePage() {
     return out;
   }, [listing]);
 
+  // Search first (counts reflect it), then the kind filter, then the sort.
+  const creSearched = useMemo(() => {
+    const q = creQuery.trim().toLowerCase();
+    return q ? items.filter((i) => i.filename.toLowerCase().includes(q)) : items;
+  }, [items, creQuery]);
+  const libSearched = useMemo(() => {
+    const q = libQuery.trim().toLowerCase();
+    return q ? mediaFiles.filter((f) => f.name.toLowerCase().includes(q)) : mediaFiles;
+  }, [mediaFiles, libQuery]);
+
   const counts = useMemo(() => {
     const c: Record<Filter, number> = { all: 0, image: 0, video: 0, audio: 0 };
     if (view === "creations") {
-      c.all = items.length;
-      for (const it of items) c[it.media] = (c[it.media] ?? 0) + 1;
+      c.all = creSearched.length;
+      for (const it of creSearched) c[it.media] = (c[it.media] ?? 0) + 1;
     } else {
-      c.all = mediaFiles.length;
-      for (const f of mediaFiles) c[f.kind] = (c[f.kind] ?? 0) + 1;
+      c.all = libSearched.length;
+      for (const f of libSearched) c[f.kind] = (c[f.kind] ?? 0) + 1;
     }
     return c;
-  }, [view, items, mediaFiles]);
+  }, [view, creSearched, libSearched]);
 
-  const visible = filter === "all" ? items : items.filter((i) => i.media === filter);
-  const libVisible = filter === "all" ? mediaFiles : mediaFiles.filter((f) => f.kind === filter);
-  const libShown = libVisible.slice(0, LIB_RENDER_CAP);
+  const visible = useMemo(
+    () =>
+      sortCreations(
+        filter === "all" ? creSearched : creSearched.filter((i) => i.media === filter),
+        creSort,
+      ),
+    [creSearched, filter, creSort],
+  );
+  const libVisible = useMemo(
+    () =>
+      sortLibrary(
+        filter === "all" ? libSearched : libSearched.filter((f) => f.kind === filter),
+        libSort,
+      ),
+    [libSearched, filter, libSort],
+  );
+  const libShown = libVisible.slice(0, libCap);
+  const libRemaining = libVisible.length - libShown.length;
+
+  // Lightbox prev/next positions within the CURRENT visible lists.
+  const selIdx =
+    selected === null
+      ? -1
+      : visible.findIndex((i) => i.name === selected.name && i.version === selected.version);
+  const libIdx =
+    libSelected === null ? -1 : libShown.findIndex((f) => f.path === libSelected.path);
 
   const offline = error !== null && error.status === 0;
   const drivesOffline = drivesError !== null && drivesError.status === 0;
@@ -2111,12 +2477,19 @@ export default function CreativePage() {
   const curPath = listing?.path ?? libDir;
   const curPinned = curPath !== null && isPinned(curPath);
 
+  // Sort/search controls bind to the ACTIVE view's own state.
+  const sortValue = view === "creations" ? creSort : libSort;
+  const setSortValue = view === "creations" ? setCreSort : setLibSort;
+  const queryValue = view === "creations" ? creQuery : libQuery;
+  const setQueryValue = view === "creations" ? setCreQuery : setLibQuery;
+
   const filterRow = (
     <div className="flex flex-wrap items-center gap-2">
       {FILTERS.map((f) => (
         <button
           key={f.key}
           type="button"
+          aria-pressed={filter === f.key}
           onClick={() => setFilter(f.key)}
           className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors ${
             filter === f.key
@@ -2133,6 +2506,34 @@ export default function CreativePage() {
           <Sparkles size={12} /> new creation ✨
         </span>
       )}
+      <span className="relative ml-auto">
+        <Search
+          size={12}
+          aria-hidden="true"
+          className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500"
+        />
+        <input
+          type="search"
+          value={queryValue}
+          onChange={(e) => setQueryValue(e.target.value)}
+          placeholder="Search filenames…"
+          aria-label="Search by filename"
+          className="w-44 rounded-full border border-white/10 bg-ink-950 py-1.5 pl-7 pr-3 text-xs text-zinc-200 placeholder:text-zinc-600 focus:border-accent/40 focus:outline-none"
+        />
+      </span>
+      <select
+        value={sortValue}
+        onChange={(e) => setSortValue(e.target.value as SortKey)}
+        aria-label="Sort order"
+        title="Sort order"
+        className="appearance-none rounded-full border border-white/10 bg-ink-950 px-3 py-1.5 text-xs text-zinc-300 focus:border-accent/40 focus:outline-none"
+      >
+        {(view === "creations" ? SORTS : LIB_SORTS).map((s) => (
+          <option key={s.key} value={s.key}>
+            {s.label}
+          </option>
+        ))}
+      </select>
     </div>
   );
 
@@ -2254,7 +2655,9 @@ export default function CreativePage() {
             ) : visible.length === 0 ? (
               <Card>
                 <Empty icon={mediaIcon(filter === "all" ? "image" : filter, 22)}>
-                  No {filter} creations yet — try another filter.
+                  {creQuery.trim()
+                    ? `No creations match “${creQuery.trim()}” — try another search or filter.`
+                    : `No ${filter} creations yet — try another filter.`}
                 </Empty>
               </Card>
             ) : (
@@ -2429,22 +2832,29 @@ export default function CreativePage() {
             ) : libVisible.length === 0 ? (
               <Card>
                 <Empty icon={mediaIcon(filter === "all" ? "image" : filter, 22)}>
-                  No {filter} files in this folder — try another filter.
+                  {libQuery.trim()
+                    ? `No files match “${libQuery.trim()}” in this folder — try another search or filter.`
+                    : `No ${filter} files in this folder — try another filter.`}
                 </Empty>
               </Card>
             ) : (
               <div className="space-y-3">
-                {libVisible.length > LIB_RENDER_CAP && (
-                  <p className="text-[11px] text-zinc-500">
-                    Showing the first {LIB_RENDER_CAP} of {libVisible.length} media files in this
-                    folder.
-                  </p>
-                )}
                 <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 xl:grid-cols-4">
                   {libShown.map((f) => (
                     <LibraryTile key={f.path} file={f} onOpen={() => setLibSelected(f)} />
                   ))}
                 </div>
+                {libRemaining > 0 && (
+                  <div className="flex justify-center">
+                    <button
+                      type="button"
+                      onClick={() => setLibCap((c) => c + LIB_RENDER_CAP)}
+                      className="inline-flex items-center gap-1.5 rounded-xl border border-white/10 px-4 py-2 text-xs font-medium text-zinc-300 transition-colors hover:border-white/20 hover:bg-white/[0.04] hover:text-zinc-100"
+                    >
+                      Show {Math.min(LIB_RENDER_CAP, libRemaining)} more ({libRemaining} remaining)
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </Reveal>
@@ -2459,6 +2869,17 @@ export default function CreativePage() {
           title={selected.filename}
           downloadName={selected.filename}
           publishBody={{ name: selected.name }}
+          deleteName={selected.name}
+          onDeleted={() => {
+            setSelected(null);
+            reload();
+          }}
+          onPrev={selIdx > 0 ? () => setSelected(visible[selIdx - 1]) : null}
+          onNext={
+            selIdx >= 0 && selIdx < visible.length - 1
+              ? () => setSelected(visible[selIdx + 1])
+              : null
+          }
           meta={
             <>
               <span className="font-mono">{formatSize(selected.size)}</span>
@@ -2486,6 +2907,12 @@ export default function CreativePage() {
           title={libSelected.name}
           downloadName={libSelected.name}
           publishBody={{ path: libSelected.path }}
+          onPrev={libIdx > 0 ? () => setLibSelected(libShown[libIdx - 1]) : null}
+          onNext={
+            libIdx >= 0 && libIdx < libShown.length - 1
+              ? () => setLibSelected(libShown[libIdx + 1])
+              : null
+          }
           meta={
             <>
               {libSelected.size !== null && (
@@ -2501,6 +2928,17 @@ export default function CreativePage() {
           }
           onClose={() => setLibSelected(null)}
         />
+      )}
+
+      {dragActive && (
+        <div
+          aria-hidden="true"
+          className="pointer-events-none fixed inset-0 z-[60] flex items-center justify-center bg-black/60 backdrop-blur-sm"
+        >
+          <div className="flex items-center gap-3 rounded-2xl border-2 border-dashed border-accent/50 bg-ink-950/85 px-8 py-6 text-sm font-semibold text-accent-soft">
+            <Upload size={18} /> Drop to add to the gallery
+          </div>
+        </div>
       )}
     </PageShell>
   );
