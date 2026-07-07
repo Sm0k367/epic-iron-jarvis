@@ -18,9 +18,17 @@ import {
   History,
   MessageSquare,
   Workflow,
+  SquareKanban,
+  ShieldCheck,
+  Check,
+  Play,
+  Music,
+  Paperclip,
 } from "lucide-react";
-import { api, del, get, post, ApiError } from "@/lib/api";
-import { useApi } from "@/lib/useApi";
+import { api, del, get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
+import { useApi, usePolledApi } from "@/lib/useApi";
+import { useReviews } from "@/lib/useReviews";
+import { KanbanBoard } from "@/components/kanban/KanbanBoard";
 import type { Project, SessionDetail, SessionView, WorkflowRun } from "@/lib/types";
 import {
   Card,
@@ -87,11 +95,51 @@ interface ProjectTaskStart extends SessionView {
   target_path?: string | null;
 }
 
+/** One permissioned tool the task is likely to need (POST …/task/plan). */
+interface PlanTool {
+  name: string;
+  perm_key: string;
+  why: string;
+}
+/** POST /projects/{id}/task/plan → the tools to bundle into one grant. */
+interface TaskPlan {
+  tools: PlanTool[];
+  note?: string;
+}
+
+/** One artifact a session GENERATED (GET /artifacts?session_id=…). */
+interface TaskArtifact {
+  name: string;
+  version: number;
+  kind: string;
+  filename: string;
+  media: "image" | "video" | "audio" | null;
+  size: number;
+  created_at: string;
+  url: string; // "/creative/file/<name>" for media items
+}
+
 /** Session states that end the composer's 2s polling. */
 const TERMINAL_STATUSES = new Set(["completed", "failed", "cancelled"]);
 
 function errText(err: unknown): string {
   return err instanceof ApiError ? err.message : String(err);
+}
+
+/** Media tags can't send the Authorization header — the token rides as ?token=. */
+function mediaSrc(url: string): string {
+  const t = ijToken();
+  const sep = url.includes("?") ? "&" : "?";
+  return `${API_BASE}${url}${t ? `${sep}token=${encodeURIComponent(t)}` : ""}`;
+}
+
+/** Segmented Activity|Board toggle button styling. */
+function segClass(active: boolean): string {
+  return `inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-xs font-medium transition-colors ${
+    active
+      ? "bg-accent/[0.14] text-accent-soft"
+      : "text-zinc-400 hover:text-zinc-200"
+  }`;
 }
 
 /* Small action-button styles (match the Templates "Use" pill + ghost rows). */
@@ -110,6 +158,54 @@ function ActiveBadge() {
       <span className="h-1.5 w-1.5 rounded-full bg-accent animate-pulse-glow shadow-[0_0_8px_2px_rgba(34,211,238,0.55)]" />
       Active
     </span>
+  );
+}
+
+/**
+ * The per-project Kanban. Mounted ONLY while the Board tab is showing, so a
+ * collapsed (or Activity-tab) card never 4s-polls /sessions. Feeds KanbanBoard
+ * exactly like the standalone /kanban page, scoped to this project.
+ */
+function ProjectBoard({ projectId }: { projectId: string }) {
+  const { data, error, reload } = usePolledApi<{ sessions: SessionView[] }>(
+    "/sessions",
+    4000,
+  );
+  const sessions = data?.sessions;
+  const reviewsState = useReviews(sessions);
+  const list = sessions ?? [];
+  const mine = list.filter((s) => s.project_id === projectId);
+  const offline = error && error.status === 0;
+
+  function refreshAll() {
+    reload();
+    reviewsState.reload();
+  }
+
+  if (offline && list.length === 0) {
+    return (
+      <p className="py-2 text-xs text-zinc-500">
+        Board unavailable — the daemon looks offline.
+      </p>
+    );
+  }
+  if (mine.length === 0) {
+    return (
+      <div className="py-2 text-xs text-zinc-500">
+        No sessions in this project yet — run a task above, or make it active and
+        start a chat.
+      </div>
+    );
+  }
+  // KanbanBoard filters to projectId itself; pass the full list so its lane math
+  // stays identical to the standalone page.
+  return (
+    <KanbanBoard
+      sessions={list}
+      reviews={reviewsState.reviews}
+      reload={refreshAll}
+      projectId={projectId}
+    />
   );
 }
 
@@ -145,6 +241,9 @@ function ProjectCard({
   const [runsLoading, setRunsLoading] = useState(false);
   const [runsError, setRunsError] = useState<string | null>(null);
 
+  /* Expanded view: the activity hub, or this project's embedded Kanban board. */
+  const [view, setView] = useState<"activity" | "board">("activity");
+
   /* Task composer: direct an agent inside this project's folder. */
   const [taskText, setTaskText] = useState("");
   const [taskOutput, setTaskOutput] = useState<TaskOutput>("chat");
@@ -156,6 +255,17 @@ function ProjectCard({
   /** Latest polled view of that run's session. */
   const [taskSession, setTaskSession] = useState<SessionView | null>(null);
   const [taskPollError, setTaskPollError] = useState<string | null>(null);
+  /** Artifacts the finished run produced (null = not fetched for this run yet). */
+  const [taskArtifacts, setTaskArtifacts] = useState<TaskArtifact[] | null>(null);
+
+  /* Two-tap tool permission — planning → bundled grant → run. */
+  const [planning, setPlanning] = useState(false);
+  /** The pending grant panel (tools.length > 0). Null = no panel showing. */
+  const [pendingPlan, setPendingPlan] = useState<TaskPlan | null>(null);
+  /** perm_key → checked. Defaults every planned tool to allowed. */
+  const [checkedKeys, setCheckedKeys] = useState<Record<string, boolean>>({});
+  /** One-line note from the planner (e.g. "no model connected"). */
+  const [planNote, setPlanNote] = useState<string | null>(null);
 
   const taskDone =
     taskSession !== null && TERMINAL_STATUSES.has(taskSession.status);
@@ -186,13 +296,37 @@ function ProjectCard({
     };
   }, [expanded, taskRun, taskDone]);
 
-  async function startTask() {
+  // Once a run reaches a terminal status, fetch what it produced (once per run).
+  // Honest empty (or a fetch error) => render nothing.
+  useEffect(() => {
+    if (!taskDone || !taskRun || taskArtifacts !== null) return;
+    let alive = true;
+    get<{ artifacts: TaskArtifact[] }>(
+      `/artifacts?session_id=${encodeURIComponent(taskRun.id)}`,
+    )
+      .then((d) => {
+        if (alive) setTaskArtifacts(d.artifacts ?? []);
+      })
+      .catch(() => {
+        if (alive) setTaskArtifacts([]);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [taskDone, taskRun, taskArtifacts]);
+
+  /** Fire the task with an explicit tool grant (the approved perm_keys). */
+  async function startTask(allowTools: string[]) {
     const text = taskText.trim();
-    if (!text || taskStarting) return;
+    if (!text) return;
     setTaskStarting(true);
     setTaskError(null);
     try {
-      const body: Record<string, string> = { text, output: taskOutput };
+      const body: Record<string, unknown> = {
+        text,
+        output: taskOutput,
+        allow_tools: allowTools,
+      };
       if (taskOutput !== "chat" && taskFilename.trim())
         body.filename = taskFilename.trim();
       const started = await post<ProjectTaskStart>(
@@ -202,13 +336,61 @@ function ProjectCard({
       setTaskRun(started); // replaces any previous strip
       setTaskSession(started); // flat SessionView snapshot until the first poll
       setTaskPollError(null);
+      setTaskArtifacts(null); // new run → re-fetch artifacts when it finishes
       setTaskText("");
       setTaskFilename("");
+      setPendingPlan(null); // dismiss the grant panel
+      setCheckedKeys({});
     } catch (err) {
       setTaskError(errText(err));
     } finally {
       setTaskStarting(false);
     }
+  }
+
+  // Run click: plan first (which permissioned tools this needs), then either
+  // show a bundled grant panel or run straight through. A plan failure never
+  // blocks — we fall back to running with an empty grant.
+  async function onRun() {
+    const text = taskText.trim();
+    if (!text || taskStarting || planning) return;
+    setTaskError(null);
+    setPlanNote(null);
+    setPendingPlan(null);
+    setPlanning(true);
+    let plan: TaskPlan | null = null;
+    try {
+      plan = await post<TaskPlan>(
+        `/projects/${encodeURIComponent(p.id)}/task/plan`,
+        { text },
+      );
+    } catch {
+      plan = null; // planning is best-effort — proceed without a grant
+    } finally {
+      setPlanning(false);
+    }
+    const tools = plan?.tools ?? [];
+    if (tools.length > 0) {
+      setCheckedKeys(Object.fromEntries(tools.map((t) => [t.perm_key, true])));
+      setPendingPlan(plan);
+      return; // wait for the user to confirm the grant
+    }
+    // Nothing permissioned needed (or no model) — run with an empty grant.
+    if (plan?.note) setPlanNote(plan.note);
+    await startTask([]);
+  }
+
+  /** Confirm the grant panel — send only the tools left checked. */
+  function confirmGrant() {
+    const keys = (pendingPlan?.tools ?? [])
+      .filter((t) => checkedKeys[t.perm_key])
+      .map((t) => t.perm_key);
+    void startTask(keys);
+  }
+
+  function cancelGrant() {
+    setPendingPlan(null);
+    setCheckedKeys({});
   }
 
   async function run(action: string, fn: () => Promise<unknown>): Promise<boolean> {
@@ -459,6 +641,32 @@ function ProjectCard({
 
       {expanded && (
         <div className="mt-3.5 space-y-4 border-t hairline pt-3.5">
+          {/* View toggle: the activity hub, or this project's live Kanban board. */}
+          <div className="flex items-center gap-2">
+            <div className="inline-flex rounded-lg border border-white/10 bg-white/[0.02] p-0.5">
+              <button
+                type="button"
+                onClick={() => setView("activity")}
+                aria-pressed={view === "activity"}
+                className={segClass(view === "activity")}
+              >
+                <History size={12} /> Activity
+              </button>
+              <button
+                type="button"
+                onClick={() => setView("board")}
+                aria-pressed={view === "board"}
+                className={segClass(view === "board")}
+              >
+                <SquareKanban size={12} /> Board
+              </button>
+            </div>
+          </div>
+
+          {view === "board" ? (
+            <ProjectBoard projectId={p.id} />
+          ) : (
+            <>
           {/* --- Task composer ------------------------------------------------ */}
           <section>
             <div className="mb-1.5 flex items-center gap-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
@@ -471,7 +679,7 @@ function ProjectCard({
                 onKeyDown={(e) => {
                   if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
                     e.preventDefault();
-                    void startTask();
+                    void onRun();
                   }
                 }}
                 rows={2}
@@ -507,13 +715,20 @@ function ProjectCard({
                 )}
                 <button
                   type="button"
-                  onClick={() => void startTask()}
-                  disabled={taskStarting || !taskText.trim()}
+                  onClick={() => void onRun()}
+                  disabled={
+                    taskStarting ||
+                    planning ||
+                    pendingPlan !== null ||
+                    !taskText.trim()
+                  }
                   title="Start an agent session on this task"
                   className="btn-accent shrink-0"
                 >
                   {taskStarting ? (
                     <LoaderInline label="Starting…" />
+                  ) : planning ? (
+                    <LoaderInline label="Checking…" />
                   ) : (
                     <>
                       <Send size={13} /> Run
@@ -527,6 +742,83 @@ function ProjectCard({
                   one has none, so only “Reply in chat” is available.
                 </p>
               )}
+
+              {planning && (
+                <p className="text-[11px] text-zinc-500">
+                  Checking what this needs…
+                </p>
+              )}
+
+              {/* Bundled tool-permission grant — one confirm covers the task. */}
+              {pendingPlan && pendingPlan.tools.length > 0 && (
+                <div className="rounded-lg border border-amber-500/25 bg-amber-500/[0.06] px-3 py-2.5">
+                  <div className="flex items-center gap-1.5 text-xs font-medium text-amber-200">
+                    <ShieldCheck size={13} /> This task will use these tools
+                  </div>
+                  <ul className="mt-2 space-y-1.5">
+                    {pendingPlan.tools.map((t) => (
+                      <li key={t.perm_key} className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={checkedKeys[t.perm_key] ?? false}
+                          onChange={(e) =>
+                            setCheckedKeys((m) => ({
+                              ...m,
+                              [t.perm_key]: e.target.checked,
+                            }))
+                          }
+                          className="mt-0.5 shrink-0 accent-[color:var(--accent,#22d3ee)]"
+                          aria-label={`Allow ${t.name}`}
+                        />
+                        <div className="min-w-0">
+                          <div className="text-xs font-medium text-zinc-200">
+                            {t.name}
+                          </div>
+                          {t.why && (
+                            <div className="text-[11px] text-zinc-500">
+                              {t.why}
+                            </div>
+                          )}
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                  {pendingPlan.note && (
+                    <p className="mt-2 text-[11px] text-zinc-500">
+                      {pendingPlan.note}
+                    </p>
+                  )}
+                  <div className="mt-2.5 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={confirmGrant}
+                      disabled={taskStarting}
+                      className="btn-accent"
+                    >
+                      {taskStarting ? (
+                        <LoaderInline label="Starting…" />
+                      ) : (
+                        <>
+                          <Check size={13} /> Allow all & run
+                        </>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={cancelGrant}
+                      disabled={taskStarting}
+                      className="btn-ghost"
+                    >
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {planNote && !pendingPlan && (
+                <p className="text-[11px] text-zinc-500">{planNote}</p>
+              )}
+
               {taskError && <ErrorNote>{taskError}</ErrorNote>}
 
               {taskRun && (
@@ -590,6 +882,67 @@ function ProjectCard({
                       {taskSession?.summary ||
                         `The session ${taskSession?.status} without a summary — open it for details.`}
                     </p>
+                  )}
+
+                  {/* What the run PRODUCED — media as thumbs, else a chip. */}
+                  {taskDone && taskArtifacts && taskArtifacts.length > 0 && (
+                    <div className="mt-2.5 border-t hairline pt-2.5">
+                      <div className="mb-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+                        Produced
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {taskArtifacts.map((a) =>
+                          a.media === "image" ? (
+                            <Link
+                              key={a.name}
+                              href="/creative"
+                              title={a.filename}
+                              className="block overflow-hidden rounded-lg border border-white/10 transition-colors hover:border-accent/40"
+                            >
+                              {/* eslint-disable-next-line @next/next/no-img-element */}
+                              <img
+                                src={mediaSrc(a.url)}
+                                alt={a.filename}
+                                className="h-14 w-14 object-cover"
+                              />
+                            </Link>
+                          ) : a.media === "video" ? (
+                            <Link
+                              key={a.name}
+                              href="/creative"
+                              title={a.filename}
+                              className="relative flex h-14 w-14 items-center justify-center rounded-lg border border-white/10 bg-black/40 transition-colors hover:border-accent/40"
+                            >
+                              <Play size={18} className="text-zinc-200" />
+                            </Link>
+                          ) : a.media === "audio" ? (
+                            <Link
+                              key={a.name}
+                              href="/creative"
+                              title={a.filename}
+                              className="inline-flex max-w-[12rem] items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.02] px-2.5 py-1.5 text-[11px] text-zinc-300 transition-colors hover:border-accent/40"
+                            >
+                              <Music size={12} className="shrink-0" />
+                              <span className="min-w-0 truncate font-mono">
+                                {a.filename}
+                              </span>
+                            </Link>
+                          ) : (
+                            <Link
+                              key={a.name}
+                              href="/creative"
+                              title={a.filename}
+                              className="inline-flex max-w-[12rem] items-center gap-1.5 rounded-lg border border-white/10 bg-white/[0.02] px-2.5 py-1.5 text-[11px] text-zinc-300 transition-colors hover:border-accent/40"
+                            >
+                              <Paperclip size={12} className="shrink-0" />
+                              <span className="min-w-0 truncate font-mono">
+                                {a.filename}
+                              </span>
+                            </Link>
+                          ),
+                        )}
+                      </div>
+                    </div>
                   )}
                 </div>
               )}
@@ -704,6 +1057,8 @@ function ProjectCard({
               </ul>
             )}
           </section>
+            </>
+          )}
         </div>
       )}
     </Card>

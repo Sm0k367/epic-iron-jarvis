@@ -76,13 +76,19 @@ class PermissionEngine:
         tool_name: str,
         args: dict,
         agent_overrides: dict[str, str] | None = None,
+        session_allow: "Iterable[str] | None" = None,
     ) -> PermissionDecision:
         mode = self.mode_for(tool_name, agent_overrides)
         if mode is PermissionMode.ALLOW:
             return PermissionDecision(True, mode, "allowed by policy")
         if mode is PermissionMode.DENY:
+            # A hard deny is NEVER lifted by a session grant — safety floor.
             return PermissionDecision(False, mode, "denied by policy")
         # mode is ASK
+        # Per-session grant: the user bundle-approved this tool for THIS task
+        # before it ran, so we don't re-ask (and headless doesn't fail-close it).
+        if session_allow is not None and tool_name in session_allow:
+            return PermissionDecision(True, mode, "granted for this task")
         if self._ask_resolver is None:
             return PermissionDecision(
                 False, mode, "requires approval; no resolver in headless mode"

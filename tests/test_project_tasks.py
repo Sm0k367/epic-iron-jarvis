@@ -56,8 +56,9 @@ def test_project_task_file_output_composes_target(tmp_path):
         )
         assert r.status_code == 200
         view = r.json()
-        assert view["target_path"].endswith("inventory.xlsx")
-        assert "write_document" in view["task"] and view["target_path"] in view["task"]
+        assert view["target_path"].endswith("inventory.xlsx")  # absolute, for the UI
+        # The prompt names the deliverable (relative — the folder IS the cwd).
+        assert "write_document" in view["task"] and "inventory.xlsx" in view["task"]
         _wait_done(client, view["id"])  # let the bg session settle before teardown
 
 
@@ -87,6 +88,82 @@ def test_project_task_guards(tmp_path):
             == 400
         )
         assert client.post("/projects/nope/task", json={"text": "x"}).status_code == 404
+
+
+def test_session_grant_lifts_ask_but_never_deny():
+    """A per-session grant turns 'ask' into allow for THIS run; a hard 'deny'
+    is never lifted (safety floor)."""
+    from iron_jarvis.tools.permissions import PermissionEngine
+
+    eng = PermissionEngine(
+        {"shell": "ask", "danger": "deny", "read_file": "allow"}, ask_resolver=None
+    )
+    # Headless (no resolver): ask normally denies...
+    assert eng.authorize("shell", {}).allowed is False
+    # ...but a session grant allows it.
+    assert eng.authorize("shell", {}, session_allow={"shell"}).allowed is True
+    # A hard deny stays denied even if granted.
+    assert eng.authorize("danger", {}, session_allow={"danger"}).allowed is False
+    # Allow is unaffected.
+    assert eng.authorize("read_file", {}, session_allow=set()).allowed is True
+
+
+def test_project_task_runs_in_folder_with_grant(tmp_path):
+    """A project-with-folder task runs IN the folder (workspace == root) and
+    carries the bundled grant."""
+    from iron_jarvis.core.db import session_scope
+    from iron_jarvis.core.config import load_config
+    from iron_jarvis.core.models import Session as SessionModel
+    from sqlmodel import select
+
+    with TestClient(create_app(str(tmp_path))) as client:
+        p = _mk_project(client, tmp_path)
+        r = client.post(
+            f"/projects/{p['id']}/task",
+            json={"text": "list files", "output": "chat", "allow_tools": ["shell", "read_file"]},
+        )
+        sid = r.json()["id"]
+        _wait_done(client, sid)
+        from iron_jarvis.core.db import open_db
+
+        engine = open_db(load_config(str(tmp_path)).db_path)
+        with session_scope(engine) as db:
+            row = db.exec(select(SessionModel).where(SessionModel.id == sid)).first()
+        assert row.workspace_path == p["root"]  # ran IN the project folder
+        import json as _json
+
+        assert set(_json.loads(row.allow_tools_json)) == {"shell", "read_file"}
+
+
+def test_task_plan_honest_offline(tmp_path):
+    with TestClient(create_app(str(tmp_path))) as client:
+        p = _mk_project(client, tmp_path)
+        r = client.post(f"/projects/{p['id']}/task/plan", json={"text": "make a chart"})
+        assert r.status_code == 200
+        body = r.json()
+        assert body["tools"] == []  # no real model -> honest empty bundle
+        assert "note" in body
+        assert client.post("/projects/nope/task/plan", json={"text": "x"}).status_code == 404
+
+
+def test_artifacts_by_session_filter(tmp_path):
+    from iron_jarvis.core.config import load_config
+    from iron_jarvis.core.db import open_db
+
+    client = TestClient(create_app(str(tmp_path)))
+    engine = open_db(load_config(str(tmp_path)).db_path)
+    # Simulate a session generating an artifact.
+    from iron_jarvis.platform import build_platform
+
+    plat = build_platform(str(tmp_path))
+    plat.artifacts.save("report", "hello", filename="report.md", session_id="sess-x")
+    plat.artifacts.save("other", "x", filename="o.md", session_id="sess-y")
+
+    got = client.get("/artifacts?session_id=sess-x").json()
+    assert got["session_id"] == "sess-x"
+    assert [a["name"] for a in got["artifacts"]] == ["report"]
+    # No filter -> the legacy names list.
+    assert "artifacts" in client.get("/artifacts").json()
 
 
 def test_docker_sandbox_requires_linux_daemon(monkeypatch):

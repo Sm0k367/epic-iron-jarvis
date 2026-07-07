@@ -9,7 +9,6 @@ import {
   MessageSquare,
   Boxes,
   Images,
-  SquareKanban,
   Sparkles,
   BrainCircuit,
   Package,
@@ -43,7 +42,6 @@ import {
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
-import { ProjectSwitcher } from "@/components/ProjectSwitcher";
 
 interface NavItem {
   href: string;
@@ -76,7 +74,7 @@ const NAV: NavSection[] = [
     items: [
       { href: "/workflows", label: "Workflows", icon: Workflow },
       { href: "/schedules", label: "Schedules", icon: CalendarClock },
-      { href: "/kanban", label: "Kanban", icon: SquareKanban },
+      // Kanban lives INSIDE a project now (Projects → open a project → Board).
       { href: "/templates", label: "Templates", icon: LayoutTemplate },
       { href: "/agents", label: "Agents", icon: Bot },
       { href: "/tools", label: "Tools", icon: Wrench },
@@ -409,10 +407,6 @@ export function Sidebar() {
         <Brand />
       </div>
       <div className="mx-5 h-px bg-accent-line opacity-60" />
-      {/* The context spine, always in view: which project everything runs in. */}
-      <div className="pt-3">
-        <ProjectSwitcher />
-      </div>
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
         <NavLinks layoutId="nav-active" advanced={advanced} />
       </nav>
@@ -501,9 +495,6 @@ export function MobileNav() {
                 </button>
               </div>
               <div className="mx-5 h-px bg-accent-line opacity-60" />
-              <div className="pt-3">
-                <ProjectSwitcher />
-              </div>
               <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
                 <NavLinks
                   layoutId="nav-active-mobile"

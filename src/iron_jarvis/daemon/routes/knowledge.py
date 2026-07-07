@@ -20,8 +20,49 @@ from ...core.fs_policy import fs_read_ok, is_protected_path
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/artifacts")
-    def artifacts() -> dict[str, Any]:
-        return {"artifacts": d.platform.artifacts.list_names()}
+    def artifacts(session_id: str = "") -> dict[str, Any]:
+        """All artifact names; or — with ?session_id= — the artifacts a specific
+        session GENERATED (so a project task can show what it produced),
+        newest first with media flags for the gallery/lightbox."""
+        sid = session_id.strip()
+        if not sid:
+            return {"artifacts": d.platform.artifacts.list_names()}
+        from sqlmodel import select
+
+        from ...artifacts.models import ArtifactRecord
+        from ...core.db import session_scope
+        from ...creative.service import media_kind
+
+        with session_scope(d.platform.engine) as db:
+            rows = list(
+                db.exec(
+                    select(ArtifactRecord)
+                    .where(ArtifactRecord.session_id == sid)
+                    .order_by(ArtifactRecord.created_at.desc())  # type: ignore[attr-defined]
+                )
+            )
+        seen: set[str] = set()
+        items = []
+        for r in rows:
+            if r.name in seen:  # one card per artifact name (store versions it)
+                continue
+            seen.add(r.name)
+            from pathlib import Path as _P
+
+            items.append(
+                {
+                    "name": r.name,
+                    "version": r.version,
+                    "kind": r.kind,
+                    "filename": _P(r.path).name,
+                    "media": media_kind(r.path)
+                    or ("image" if r.kind == "screenshot" else None),
+                    "size": r.size,
+                    "created_at": r.created_at.isoformat() if r.created_at else None,
+                    "url": f"/creative/file/{r.name}",
+                }
+            )
+        return {"artifacts": items, "session_id": sid}
 
     @app.get("/artifacts/{name}")
     def artifact(name: str) -> dict[str, Any]:

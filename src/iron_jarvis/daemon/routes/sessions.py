@@ -28,6 +28,7 @@ def register(app: FastAPI, d) -> None:
                 model=body.model,
                 self_dev=body.self_dev,
                 project_id=body.project_id or None,
+                allow_tools=body.allow_tools or None,
             )
         except (PermissionError, RuntimeError) as exc:  # self-dev gating
             raise HTTPException(status_code=400, detail=str(exc))

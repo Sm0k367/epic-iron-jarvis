@@ -67,7 +67,7 @@ const COMMANDS: Command[] = [
   { id: "chat", label: "Chat", hint: "Work", icon: MessageSquare, href: "/chat", keywords: "talk ask agent assistant conversation message tool" },
   { id: "sessions", label: "Sessions", hint: "Work", icon: Boxes, href: "/sessions", keywords: "runs history" },
   { id: "creative", label: "Creative", hint: "Work", icon: Images, href: "/creative", keywords: "gallery media image video audio pixio generate studio" },
-  { id: "kanban", label: "Kanban", hint: "Work", icon: SquareKanban, href: "/kanban", keywords: "board tasks status" },
+  { id: "kanban", label: "Project board (Kanban)", hint: "Work", icon: SquareKanban, href: "/projects", keywords: "board tasks status kanban project" },
   { id: "templates", label: "Templates", hint: "Work", icon: LayoutTemplate, href: "/templates", keywords: "preset saved reusable" },
   { id: "agents", label: "Agents", hint: "Work", icon: Bot, href: "/agents", keywords: "builder supervisor planner researcher reviewer" },
   { id: "tools", label: "Tools", hint: "Work", icon: Wrench, href: "/tools", keywords: "custom tool create reusable command" },

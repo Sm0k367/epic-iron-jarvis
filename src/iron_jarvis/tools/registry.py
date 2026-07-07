@@ -7,7 +7,7 @@ recorded as a ToolInvocation (§19 responsibilities).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Iterable
 
 from ..core.db import dumps, session_scope
 from ..core.events import EventType
@@ -62,12 +62,15 @@ class ToolRegistry:
         ctx: ToolContext,
         perms: PermissionEngine,
         agent_overrides: dict[str, str] | None = None,
+        session_allow: "Iterable[str] | None" = None,
     ) -> ToolResult:
         tool = self._tools.get(name)
         if tool is None:
             return ToolResult(ok=False, error=f"unknown tool '{name}'")
 
-        decision = perms.authorize(tool.perm_key(), args, agent_overrides)
+        decision = perms.authorize(
+            tool.perm_key(), args, agent_overrides, session_allow=session_allow
+        )
         if not decision.allowed:
             await ctx.event_bus.publish(
                 EventType.TOOL_DENIED,

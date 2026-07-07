@@ -11,7 +11,13 @@ from sqlmodel import select
 from typing import Any
 
 from ..app import _agent_type, _session_view
-from ..schemas import PROJECT_TASK_OUTPUTS, ProjectCreate, ProjectPatch, ProjectTaskBody
+from ..schemas import (
+    PROJECT_TASK_OUTPUTS,
+    ProjectCreate,
+    ProjectPatch,
+    ProjectTaskBody,
+    ToolPlanBody,
+)
 from ...core.db import session_scope
 
 
@@ -198,14 +204,19 @@ def register(app: FastAPI, d) -> None:
                 ),
             )
 
+        in_folder = root is not None and root.is_dir()
         lines = [f"Task: {text}", ""]
-        if root is not None and root.is_dir():
+        if in_folder:
+            # The session RUNS IN this folder (it's the workspace) — the agent
+            # reads/writes it directly with plain filenames.
             lines.insert(
                 0,
-                f"Work inside the project folder: {root}. Use absolute paths "
-                "under it for every file you read or create.",
+                "You are working directly inside the project folder — it is your "
+                "current directory. Read and create files here with plain "
+                "relative paths.",
             )
         target_path: str | None = None
+        rel_name: str | None = None
         if output == "chat":
             lines.append(
                 "Deliverable: a clear, complete written answer in your final "
@@ -216,12 +227,13 @@ def register(app: FastAPI, d) -> None:
             stem = Path(body.filename or "").stem.strip()
             if not stem:
                 stem = re.sub(r"[^A-Za-z0-9]+", "-", text[:40]).strip("-").lower() or "task"
-            target_path = str(root / f"{stem}.{output}")
+            rel_name = f"{stem}.{output}"
+            target_path = str(root / rel_name)
             lines.append(
-                f"Deliverable: write the result to exactly {target_path} using "
-                "the write_document tool (markdown headings/lists/tables become "
-                "real structure in docx/pdf/pptx/html; pass a list of rows for "
-                "xlsx/csv). State the saved path in your final summary."
+                f"Deliverable: write the result to '{rel_name}' (in this folder) "
+                "using the write_document tool — markdown headings/lists/tables "
+                "become real structure in docx/pdf/pptx/html; pass a list of "
+                "rows for xlsx/csv. State the saved file in your final summary."
             )
         lines.append(
             "Work autonomously to completion — make reasonable choices instead "
@@ -233,6 +245,8 @@ def register(app: FastAPI, d) -> None:
                 _agent_type("builder"),
                 None,
                 project_id=project.id,
+                allow_tools=body.allow_tools or None,
+                workspace_root=str(root) if in_folder else None,
             )
         except (PermissionError, RuntimeError) as exc:
             raise HTTPException(status_code=400, detail=str(exc))
@@ -242,3 +256,63 @@ def register(app: FastAPI, d) -> None:
         if target_path:
             view["target_path"] = target_path
         return view
+
+    @app.post("/projects/{project_id}/task/plan")
+    async def plan_project_task(project_id: str, body: ToolPlanBody) -> dict[str, Any]:
+        """Ask the model which registry tools a plain-text task will likely
+        need, so the UI can request permission for the WHOLE bundle at once
+        instead of prompting per tool mid-run. Honest, best-effort: returns an
+        empty plan (task still runnable) when no real model can answer."""
+        import json as _json
+
+        from ...core.models import Project
+        from ...providers.adapters.base import LLMMessage
+
+        text = (body.text or "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="text is required")
+        with session_scope(d.platform.engine) as db:
+            if db.get(Project, project_id) is None:
+                raise HTTPException(status_code=404, detail="no such project")
+
+        # Only tools whose DEFAULT mode is 'ask' are worth bundling — allow
+        # tools already run, deny tools never will. Map name -> perm_key so the
+        # grant the UI sends back matches what the permission engine checks.
+        specs = d.platform.registry.specs()
+        askable: dict[str, dict[str, str]] = {}
+        for spec in specs:
+            name = spec.get("name")
+            tool = d.platform.registry.get(name) if name else None
+            if tool is None:
+                continue
+            pk = tool.perm_key()
+            if d.platform.permissions.mode_for(pk).value != "ask":
+                continue
+            askable[name] = {"perm_key": pk, "description": spec.get("description", "")}
+        if not askable:
+            return {"tools": [], "note": "no permissioned tools needed"}
+
+        adapter, used = d._failover_adapter("mock")
+        if adapter is None:
+            return {"tools": [], "note": "connect a model to auto-detect tool needs"}
+        catalog = "\n".join(f"- {n}: {v['description'][:120]}" for n, v in askable.items())
+        system = (
+            "You choose which tools an agent will need for a task. Reply with "
+            "ONLY a JSON array of the tool NAMES (from the catalog) the task "
+            "will actually use — omit tools it won't. Be minimal but complete."
+        )
+        prompt = f"Task: {text}\n\nTool catalog:\n{catalog}"
+        try:
+            resp, _, _ = await d._one_shot_complete(
+                used, adapter, system=system,
+                messages=[LLMMessage(role="user", content=prompt)],
+            )
+            picked = _json.loads((resp.text or "").strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip())
+            names = [str(n) for n in picked if str(n) in askable] if isinstance(picked, list) else []
+        except Exception:  # noqa: BLE001 — a bad plan must never block the task
+            names = []
+        tools = [
+            {"name": n, "perm_key": askable[n]["perm_key"], "why": askable[n]["description"][:100]}
+            for n in dict.fromkeys(names)  # de-dupe, keep order
+        ]
+        return {"tools": tools}

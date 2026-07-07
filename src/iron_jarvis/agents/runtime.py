@@ -9,6 +9,7 @@ Lifecycle state transitions are persisted and emitted on the event bus.
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 from ..core.db import session_scope
@@ -117,6 +118,16 @@ class AgentRuntime:
         await self._set_state(run, AgentState.RUNNING, session.id)
 
         workspace = Path(session.workspace_path)
+        # Per-session tool grant (bundle-approved up front): these perm_keys are
+        # treated as allowed for THIS session, so an "ask" tool the user opted
+        # into doesn't fail-close in the daemon. Never lifts a hard "deny".
+        session_allow: set[str] = set()
+        try:
+            raw = json.loads(getattr(session, "allow_tools_json", "") or "[]")
+            if isinstance(raw, list):
+                session_allow = {str(t) for t in raw if t}
+        except (ValueError, TypeError):
+            session_allow = set()
         messages: list[LLMMessage] = [LLMMessage(role="user", content=session.task)]
         tool_specs = self.p.registry.specs(agent_def.tools)
         final_text = ""
@@ -212,6 +223,7 @@ class AgentRuntime:
                     ctx,
                     self.p.permissions,
                     agent_def.permission_overrides,
+                    session_allow=session_allow,
                 )
 
             results = await asyncio.gather(

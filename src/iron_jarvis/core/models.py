@@ -76,6 +76,11 @@ class Session(SQLModel, table=True):
     model: str = "claude-opus-4-8"
     status: SessionStatus = SessionStatus.ACTIVE
     workspace_path: str = ""
+    #: Per-session tool grant (JSON list of perm_keys). The user approved these
+    #: tools UP FRONT (bundled) for THIS task, so the runtime treats an "ask" on
+    #: one of them as allowed for this session only — never overriding a hard
+    #: "deny". Empty = no extra grants. Additive column (auto-reconciled).
+    allow_tools_json: str = "[]"
     summary: str = ""
     input_tokens: int = 0
     output_tokens: int = 0

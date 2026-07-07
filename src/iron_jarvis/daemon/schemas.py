@@ -22,6 +22,9 @@ class SessionCreate(BaseModel):
     self_dev: bool = False
     # Context spine: tag into a project ("" = the ACTIVE project, if any).
     project_id: str = ""
+    # Per-session bundled tool grant (perm_keys) the user approved up front —
+    # "ask" tools in this list run without re-prompting for THIS session only.
+    allow_tools: list[str] = []
 
 
 class DocEnhanceBody(BaseModel):
@@ -207,6 +210,16 @@ class ProjectTaskBody(BaseModel):
     text: str
     output: str = "chat"  # one of PROJECT_TASK_OUTPUTS
     filename: str = ""  # optional file stem; defaults to a slug of the task
+    # Bundled tool grant (perm_keys) the user approved for this task after the
+    # /task/plan step — these run without per-call prompts.
+    allow_tools: list[str] = []
+
+
+class ToolPlanBody(BaseModel):
+    """Ask the model which tools a plain-text task will likely need, so the UI
+    can request permission for the whole bundle at once."""
+
+    text: str
 
 
 class StudioStartBody(BaseModel):

@@ -28,21 +28,36 @@ export function KanbanBoard({
   sessions,
   reviews,
   reload,
+  projectId,
 }: {
   sessions: SessionView[];
   reviews: Record<string, Review>;
   reload: () => void;
+  /**
+   * When set, the board is scoped to ONE project: only that project's sessions
+   * are laned/dragged/cleared. The standalone /kanban page passes nothing and
+   * sees every session — unchanged behaviour.
+   */
+  projectId?: string;
 }) {
   const [activeId, setActiveId] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [toast, setToast] = useState<{ kind: "ok" | "err"; text: string } | null>(null);
 
-  const lanes = useMemo(() => assignLanes(sessions, reviews), [sessions, reviews]);
+  // Project scoping is a pure client-side filter over the incoming sessions, so
+  // every downstream memo (lanes, byId) derives from the scoped set.
+  const scoped = useMemo(
+    () =>
+      projectId ? sessions.filter((s) => s.project_id === projectId) : sessions,
+    [sessions, projectId],
+  );
+
+  const lanes = useMemo(() => assignLanes(scoped, reviews), [scoped, reviews]);
   const byId = useMemo(() => {
     const m = new Map<string, SessionView>();
-    for (const s of sessions) m.set(s.id, s);
+    for (const s of scoped) m.set(s.id, s);
     return m;
-  }, [sessions]);
+  }, [scoped]);
 
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 6 } }),
@@ -137,8 +152,11 @@ export function KanbanBoard({
       )}
 
       {/* Board toolbar — the lane headers live inside KanbanColumn, so the
-          clear affordances sit here, right-aligned above Completed/Failed. */}
-      {(lanes.completed.length > 0 || lanes.failed.length > 0) && (
+          clear affordances sit here, right-aligned above Completed/Failed.
+          POST /sessions/clear is status-wide (not project-scoped), so the
+          bulk-clear buttons only appear on the unscoped standalone board — an
+          embedded per-project board must never over-clear other projects. */}
+      {!projectId && (lanes.completed.length > 0 || lanes.failed.length > 0) && (
         <div className="flex flex-wrap items-center justify-end gap-2">
           {lanes.completed.length > 0 && (
             <ConfirmButton

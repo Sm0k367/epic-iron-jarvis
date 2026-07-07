@@ -107,14 +107,25 @@ class Orchestrator:
         model: str | None = None,
         self_dev: bool = False,
         project_id: str | None = None,
+        allow_tools: list[str] | None = None,
+        workspace_root: str | None = None,
     ) -> Session:
+        import json as _json
+
         repo_for_worktree: Path | None = None
-        if self_dev:
+        # A project-folder task runs DIRECTLY in the user's folder (full
+        # read/write there, confined to it) — not a disposable worktree — so
+        # its deliverables land where the user expects. workspace_root wins
+        # over git-native for exactly this reason.
+        direct_root = None
+        if workspace_root:
+            direct_root = Path(workspace_root)
+        if direct_root is None and self_dev:
             # Gated self-development: edit Iron Jarvis itself on a worktree of its
             # OWN repo, as the Maintainer, still review-gated (never auto-merge).
             repo_for_worktree = self._self_dev_repo()
             agent_type = AgentType.MAINTAINER
-        elif self._git_enabled():
+        elif direct_root is None and self._git_enabled():
             repo_for_worktree = Path(self.p.config.project_root)
 
         session = Session(
@@ -126,20 +137,25 @@ class Orchestrator:
             # Context spine: tag into the requested project, else the ACTIVE one
             # (so chat/Spotlight/kanban inherit it with zero UI changes).
             project_id=project_id or getattr(self.p.config, "active_project_id", None),
+            allow_tools_json=_json.dumps(list(allow_tools or [])),
         )
-        workspace = self.p.config.workspaces_dir / session.id
-        if repo_for_worktree is not None:
-            try:  # git-native: a worktree on a session branch (§27)
-                gs = GitSession.start(
-                    repo_for_worktree, workspace, slug=task[:40] or "session"
-                )
-                self._git_sessions[session.id] = gs
-            except Exception:
-                if self_dev:
-                    raise  # self-dev MUST run on a worktree; never silently fall back
-                workspace.mkdir(parents=True, exist_ok=True)  # plain disposable ws
+        if direct_root is not None:
+            direct_root.mkdir(parents=True, exist_ok=True)
+            workspace = direct_root  # the agent works IN the real project folder
         else:
-            workspace.mkdir(parents=True, exist_ok=True)
+            workspace = self.p.config.workspaces_dir / session.id
+            if repo_for_worktree is not None:
+                try:  # git-native: a worktree on a session branch (§27)
+                    gs = GitSession.start(
+                        repo_for_worktree, workspace, slug=task[:40] or "session"
+                    )
+                    self._git_sessions[session.id] = gs
+                except Exception:
+                    if self_dev:
+                        raise  # self-dev MUST run on a worktree; never fall back
+                    workspace.mkdir(parents=True, exist_ok=True)  # plain ws
+            else:
+                workspace.mkdir(parents=True, exist_ok=True)
         session.workspace_path = str(workspace)
         self._save(session)
         await self.p.event_bus.publish(
