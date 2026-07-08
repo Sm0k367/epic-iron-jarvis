@@ -88,8 +88,14 @@ class ArtifactStore:
         kind: str = "file",
         filename: str | None = None,
         session_id: str | None = None,
+        project_id: str | None = None,
     ) -> Artifact:
-        """Write ``content`` as the next version of ``name`` (SPEC §26)."""
+        """Write ``content`` as the next version of ``name`` (SPEC §26).
+
+        Context spine: when ``project_id`` isn't given but the producing
+        ``session_id`` is, the artifact inherits that session's project, so
+        every generation a project task makes is scoped to the workspace
+        without any caller having to thread it through."""
         existing = self.versions(name)
         version = (existing[-1] + 1) if existing else 1
 
@@ -116,6 +122,13 @@ class ArtifactStore:
 
         if self.engine is not None:
             with session_scope(self.engine) as db:
+                # Inherit the producing session's project when not told otherwise.
+                if project_id is None and session_id:
+                    from ..core.models import Session as _Session
+
+                    parent = db.get(_Session, session_id)
+                    if parent is not None:
+                        project_id = parent.project_id
                 db.add(
                     ArtifactRecord(
                         name=name,
@@ -123,6 +136,7 @@ class ArtifactStore:
                         kind=kind,
                         path=str(path),
                         session_id=session_id,
+                        project_id=project_id,
                         size=size,
                         created_at=created,
                     )

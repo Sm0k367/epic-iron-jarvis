@@ -8,7 +8,17 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Bot, Check, Music, Paperclip, Play, Send, ShieldCheck } from "lucide-react";
+import {
+  Bot,
+  Check,
+  ExternalLink,
+  Music,
+  Paperclip,
+  Play,
+  Send,
+  ShieldCheck,
+  X,
+} from "lucide-react";
 import { get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
 import type { SessionDetail, SessionView } from "@/lib/types";
 import { Card, Badge, ErrorNote, LoaderInline } from "@/components/ui";
@@ -88,6 +98,12 @@ export function ProjectTasks({
   const [taskPollError, setTaskPollError] = useState<string | null>(null);
   /** Artifacts the finished run produced (null = not fetched for this run yet). */
   const [taskArtifacts, setTaskArtifacts] = useState<TaskArtifact[] | null>(null);
+  /** Whether the file deliverable ACTUALLY exists on disk (null = not checked). */
+  const [deliverable, setDeliverable] = useState<{ exists: boolean; size: number } | null>(
+    null,
+  );
+
+  const [cancelling, setCancelling] = useState(false);
 
   /* Two-tap tool permission — planning → bundled grant → run. */
   const [planning, setPlanning] = useState(false);
@@ -121,6 +137,28 @@ export function ProjectTasks({
       clearInterval(timer);
     };
   }, [taskRun, taskDone]);
+
+  // On completion, VERIFY the file deliverable actually exists — the strip used
+  // to assert "Saved: <path>" from the intended path even if the agent never
+  // wrote it (fabricated success). Honest signal instead.
+  useEffect(() => {
+    if (!taskDone || !taskRun || deliverable !== null) return;
+    if (taskRun.output === "chat" || !taskRun.target_path) return;
+    if (taskSession?.status !== "completed") return;
+    let alive = true;
+    get<{ exists: boolean; size: number }>(
+      `${base}/deliverable?path=${encodeURIComponent(taskRun.target_path)}`,
+    )
+      .then((d) => {
+        if (alive) setDeliverable({ exists: d.exists, size: d.size });
+      })
+      .catch(() => {
+        if (alive) setDeliverable(null); // couldn't check — don't claim either way
+      });
+    return () => {
+      alive = false;
+    };
+  }, [taskDone, taskRun, taskSession?.status, deliverable, base]);
 
   // Once a run reaches a terminal status, fetch what it produced (once per run).
   useEffect(() => {
@@ -158,6 +196,7 @@ export function ProjectTasks({
       setTaskSession(started); // flat SessionView snapshot until the first poll
       setTaskPollError(null);
       setTaskArtifacts(null); // new run → re-fetch artifacts when it finishes
+      setDeliverable(null); // new run → re-verify the deliverable
       setTaskText("");
       setTaskFilename("");
       setPendingPlan(null);
@@ -205,6 +244,20 @@ export function ProjectTasks({
   function cancelGrant() {
     setPendingPlan(null);
     setCheckedKeys({});
+  }
+
+  /** Stop a running task — a long/looping agent shouldn't strand the strip. */
+  async function cancelRun() {
+    if (!taskRun || cancelling) return;
+    setCancelling(true);
+    try {
+      await post(`/sessions/${encodeURIComponent(taskRun.id)}/cancel`);
+      // the 2s poll picks up the 'cancelled' status
+    } catch (err) {
+      setTaskPollError(errText(err));
+    } finally {
+      setCancelling(false);
+    }
   }
 
   return (
@@ -335,8 +388,18 @@ export function ProjectTasks({
           <div className="rounded-lg border border-white/[0.05] bg-white/[0.02] px-3 py-2">
             <div className="flex items-center justify-between gap-3">
               {!taskDone ? (
-                <span className="text-xs text-zinc-400">
-                  <LoaderInline label="Agent working…" />
+                <span className="flex items-center gap-2.5">
+                  <span className="text-xs text-zinc-400">
+                    <LoaderInline label="Agent working…" />
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => void cancelRun()}
+                    disabled={cancelling}
+                    className="inline-flex items-center gap-1 rounded-md border border-rose-500/25 px-1.5 py-0.5 text-[11px] font-medium text-rose-300 transition-colors hover:bg-rose-500/[0.1] disabled:opacity-50"
+                  >
+                    <X size={11} /> {cancelling ? "Stopping…" : "Stop"}
+                  </button>
                 </span>
               ) : (
                 <Badge value={taskSession?.status ?? "unknown"} />
@@ -358,12 +421,41 @@ export function ProjectTasks({
             {taskDone && taskSession?.status === "completed" && (
               <>
                 {taskRun.output !== "chat" && taskRun.target_path && (
-                  <div className="mt-1.5 flex items-center gap-1.5 text-xs text-zinc-300">
-                    <span className="shrink-0 text-zinc-500">Saved:</span>
-                    <span className="min-w-0 truncate font-mono" title={taskRun.target_path}>
-                      {taskRun.target_path}
-                    </span>
-                  </div>
+                  deliverable && !deliverable.exists ? (
+                    <div className="mt-1.5 flex items-start gap-1.5 text-xs text-amber-200">
+                      <span className="shrink-0 text-amber-300/80">Not written:</span>
+                      <span className="min-w-0">
+                        the agent finished but{" "}
+                        <span className="font-mono">{taskRun.target_path}</span> isn’t on disk —
+                        open the session to see what happened.
+                      </span>
+                    </div>
+                  ) : (
+                    <div className="mt-1.5 flex items-center gap-1.5 text-xs text-zinc-300">
+                      <span className="shrink-0 text-zinc-500">Saved:</span>
+                      <span className="min-w-0 truncate font-mono" title={taskRun.target_path}>
+                        {taskRun.target_path}
+                      </span>
+                      {deliverable?.exists && deliverable.size > 0 && (
+                        <span className="shrink-0 text-zinc-500">
+                          · {Math.max(1, Math.round(deliverable.size / 1024))} KB
+                        </span>
+                      )}
+                      {deliverable?.exists && (
+                        <a
+                          href={mediaSrc(
+                            `/creative/file-by-path?path=${encodeURIComponent(taskRun.target_path)}`,
+                          )}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          title="Open the produced file"
+                          className="inline-flex shrink-0 items-center gap-0.5 text-accent-soft transition-colors hover:text-accent"
+                        >
+                          <ExternalLink size={11} /> open
+                        </a>
+                      )}
+                    </div>
+                  )
                 )}
                 {taskSession.summary ? (
                   <div

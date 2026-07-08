@@ -145,9 +145,21 @@ function ProjectTile({
         )}
 
         {p.root && (
-          <div className="flex items-center gap-1.5 text-[11px] text-zinc-500">
+          <div
+            className={`flex items-center gap-1.5 text-[11px] ${
+              p.root_exists === false ? "text-amber-300/90" : "text-zinc-500"
+            }`}
+            title={
+              p.root_exists === false
+                ? "This folder no longer exists on disk — file tasks will fail until you fix it"
+                : p.root
+            }
+          >
             <Folder size={11} className="shrink-0" />
             <span className="truncate font-mono">{p.root}</span>
+            {p.root_exists === false && (
+              <span className="shrink-0 font-sans font-medium">· folder missing</span>
+            )}
           </div>
         )}
 
@@ -156,7 +168,10 @@ function ProjectTile({
           <span className="inline-flex items-center gap-1"><MessageSquare size={11} /> Chat</span>
           <span className="inline-flex items-center gap-1"><ListChecks size={11} /> Tasks</span>
           <span className="inline-flex items-center gap-1"><SquareKanban size={11} /> Board</span>
-          <span className="inline-flex items-center gap-1"><BookOpen size={11} /> Knowledge</span>
+          <span className="inline-flex items-center gap-1">
+            <BookOpen size={11} />{" "}
+            {p.knowledge_count ? `${p.knowledge_count} knowledge` : "Knowledge"}
+          </span>
         </div>
 
         <div className="text-[11px] text-zinc-600">
@@ -400,6 +415,12 @@ export default function ProjectsPage() {
           <div className="lg:col-span-2">
             {loading && !data ? (
               <SkeletonRows rows={4} />
+            ) : offline && !data ? (
+              // Offline is NOT "no projects" — don't tell a user with projects
+              // that they have none just because the daemon is unreachable.
+              <Card>
+                <OfflineHint />
+              </Card>
             ) : error && !offline ? (
               <Card>
                 <ErrorNote>{error.message}</ErrorNote>

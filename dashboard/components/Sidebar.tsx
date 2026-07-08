@@ -38,10 +38,13 @@ import {
   SlidersHorizontal,
   Menu,
   X,
+  Check,
+  ChevronsUpDown,
   type LucideIcon,
 } from "lucide-react";
-import { API_BASE } from "@/lib/api";
+import { API_BASE, get, post } from "@/lib/api";
 import { useDaemon } from "@/lib/daemon";
+import type { Project } from "@/lib/types";
 
 interface NavItem {
   href: string;
@@ -346,12 +349,110 @@ function NavModeToggle({
   );
 }
 
+/** The active project (context spine), always visible with one-click switching.
+ *  Anything the user starts anywhere inherits this project — so it belongs in
+ *  the shell chrome, not buried on the Projects page. */
+function ProjectSwitcher() {
+  const { health } = useDaemon();
+  const active = health?.active_project ?? null;
+  const [open, setOpen] = useState(false);
+  const [projects, setProjects] = useState<Project[] | null>(null);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!open || projects !== null) return;
+    let alive = true;
+    get<{ projects: Project[] }>("/projects")
+      .then((d) => alive && setProjects(d.projects.filter((p) => p.status !== "archived")))
+      .catch(() => alive && setProjects([]));
+    return () => {
+      alive = false;
+    };
+  }, [open, projects]);
+
+  async function choose(action: () => Promise<unknown>) {
+    setBusy(true);
+    try {
+      await action();
+      setOpen(false);
+      setProjects(null); // refetch next open; health poll updates the label
+    } catch {
+      /* leave open so the user can retry */
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        title={active ? `Active project: ${active.name}` : "No active project"}
+        className="flex w-full items-center gap-2 rounded-lg border border-white/[0.07] bg-white/[0.02] px-2.5 py-1.5 text-left transition-colors hover:border-accent/25 hover:bg-white/[0.04]"
+      >
+        <FolderKanban size={13} className={active ? "text-accent-soft" : "text-zinc-600"} />
+        <span className="min-w-0 flex-1 truncate text-[11px] font-medium text-zinc-300">
+          {active ? active.name : "No active project"}
+        </span>
+        <ChevronsUpDown size={12} className="shrink-0 text-zinc-600" />
+      </button>
+      {open && (
+        <div className="absolute bottom-full left-0 z-50 mb-1 max-h-72 w-full overflow-y-auto rounded-lg border border-white/10 bg-ink-950 p-1 shadow-card-hover">
+          {projects === null ? (
+            <div className="px-2 py-1.5 text-[11px] text-zinc-500">Loading…</div>
+          ) : projects.length === 0 ? (
+            <Link
+              href="/projects"
+              onClick={() => setOpen(false)}
+              className="block rounded-md px-2 py-1.5 text-[11px] text-accent-soft hover:bg-white/[0.04]"
+            >
+              Create a project →
+            </Link>
+          ) : (
+            <>
+              {projects.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void choose(() => post(`/projects/${encodeURIComponent(p.id)}/activate`))}
+                  className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-[11px] text-zinc-300 transition-colors hover:bg-white/[0.05] disabled:opacity-50"
+                >
+                  <Check
+                    size={12}
+                    className={p.id === active?.id ? "text-accent-soft" : "text-transparent"}
+                  />
+                  <span className="min-w-0 flex-1 truncate">{p.name}</span>
+                </button>
+              ))}
+              {active && (
+                <button
+                  type="button"
+                  disabled={busy}
+                  onClick={() => void choose(() => post("/projects/deactivate"))}
+                  className="mt-1 flex w-full items-center gap-2 rounded-md border-t border-white/[0.06] px-2 py-1.5 text-left text-[11px] text-zinc-500 transition-colors hover:bg-white/[0.04] disabled:opacity-50"
+                >
+                  <X size={12} /> Deactivate
+                </button>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 /** Shared daemon-status footer (version + connection dot + API host + deploy). */
 function SidebarFooter() {
   const { online: connected, health } = useDaemon();
   const version = health?.version;
   return (
     <div className="space-y-2 border-t border-white/[0.06] px-5 py-4">
+      {/* Active project (context spine) — always in view, one-click switch. */}
+      <ProjectSwitcher />
       {/* Version — the single source of truth (live from the daemon's /health,
           so it reflects the ACTUAL running build, not a baked constant). Links
           to Updates so it doubles as the "am I current?" affordance. */}

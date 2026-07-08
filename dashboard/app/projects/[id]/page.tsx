@@ -10,29 +10,39 @@
 
 import { use, useEffect, useState, type ReactNode } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import {
+  Archive,
+  ArchiveRestore,
   ArrowLeft,
   Bot,
   Check,
   ChevronDown,
   ChevronRight,
   Folder,
+  FolderOpen,
   History,
+  Images,
   MessageSquare,
+  Music,
   Pencil,
+  Play,
   Sparkles,
   SquareKanban,
+  Trash2,
   Zap,
   ZapOff,
   X,
 } from "lucide-react";
 import { useApi, usePolledApi } from "@/lib/useApi";
-import { patch, post, ApiError } from "@/lib/api";
+import { patch, post, del, ApiError, API_BASE, ijToken } from "@/lib/api";
 import { useReviews } from "@/lib/useReviews";
 import { KanbanBoard } from "@/components/kanban/KanbanBoard";
 import { ProjectChat } from "@/components/project/ProjectChat";
 import { ProjectTasks } from "@/components/project/ProjectTasks";
 import { KnowledgePanel } from "@/components/project/KnowledgePanel";
+import { FilePickerModal } from "@/components/FilePickerModal";
+import { ConfirmButton } from "@/components/ui";
 import type { ModelOption, Project, SessionView } from "@/lib/types";
 import {
   Card,
@@ -57,13 +67,80 @@ interface ProjectDetail {
   sessions: SessionView[];
 }
 
-type TabId = "chat" | "tasks" | "board" | "activity";
+type TabId = "chat" | "tasks" | "board" | "media" | "activity";
 const TABS: { id: TabId; label: string; icon: ReactNode }[] = [
   { id: "chat", label: "Chat", icon: <MessageSquare size={14} /> },
   { id: "tasks", label: "Tasks", icon: <Bot size={14} /> },
   { id: "board", label: "Board", icon: <SquareKanban size={14} /> },
+  { id: "media", label: "Media", icon: <Images size={14} /> },
   { id: "activity", label: "Activity", icon: <History size={14} /> },
 ];
+
+/** One media artifact from GET /creative/items?project_id=…. */
+interface ProjectMediaItem {
+  name: string;
+  media: "image" | "video" | "audio" | null;
+  filename: string;
+  url: string;
+  created_at: string | null;
+}
+
+/** Media tags can't send the Authorization header — the token rides as ?token=. */
+function mediaSrc(url: string): string {
+  const t = ijToken();
+  const sep = url.includes("?") ? "&" : "?";
+  return `${API_BASE}${url}${t ? `${sep}token=${encodeURIComponent(t)}` : ""}`;
+}
+
+/** The project's CREATIONS — every generation tagged to this project (studio,
+ *  pixio, task outputs) via the artifact spine. Ties Creative into the workspace. */
+function ProjectMedia({ projectId }: { projectId: string }) {
+  const { data, loading, error } = useApi<{ items: ProjectMediaItem[] }>(
+    `/creative/items?project_id=${encodeURIComponent(projectId)}&limit=200`,
+  );
+  const items = data?.items ?? [];
+  return (
+    <Card title={items.length ? `Media · ${items.length}` : "Media"} icon={<Images size={15} />}>
+      {loading && !data ? (
+        <SkeletonRows rows={3} />
+      ) : error && error.status === 0 ? (
+        <p className="py-2 text-sm text-zinc-500">Media unavailable — the daemon looks offline.</p>
+      ) : items.length === 0 ? (
+        <Empty icon={<Images size={22} />}>
+          No media in this project yet — generate something in Creative (or run a media task) while
+          this project is active, and it lands here.
+        </Empty>
+      ) : (
+        <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4">
+          {items.map((m) => (
+            <Link
+              key={m.name}
+              href="/creative"
+              title={m.filename}
+              className="group block overflow-hidden rounded-lg border border-white/10 transition-colors hover:border-accent/40"
+            >
+              {m.media === "image" ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={mediaSrc(m.url)}
+                  alt={m.filename}
+                  className="aspect-square w-full object-cover"
+                />
+              ) : (
+                <div className="flex aspect-square w-full items-center justify-center bg-black/40 text-zinc-300">
+                  {m.media === "video" ? <Play size={20} /> : <Music size={18} />}
+                </div>
+              )}
+              <div className="truncate px-1.5 py-1 text-[10px] text-zinc-500" title={m.filename}>
+                {m.filename}
+              </div>
+            </Link>
+          ))}
+        </div>
+      )}
+    </Card>
+  );
+}
 
 const BTN_PILL =
   "inline-flex items-center gap-1.5 rounded-lg border border-accent/30 bg-accent/[0.08] px-2.5 py-1 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50";
@@ -136,7 +213,13 @@ function ProjectBoard({ projectId }: { projectId: string }) {
   );
 }
 
-function ActivityList({ sessions }: { sessions: SessionView[] }) {
+/** Live recent activity for the project — polls /sessions (like the Board) so
+ *  it never diverges from the Board's freshness or count. */
+function ActivityList({ projectId }: { projectId: string }) {
+  const { data } = usePolledApi<{ sessions: SessionView[] }>("/sessions", 4000);
+  const sessions = (data?.sessions ?? [])
+    .filter((s) => s.project_id === projectId)
+    .slice(0, 40);
   return (
     <Card
       title={sessions.length ? `Recent activity · ${sessions.length}` : "Recent activity"}
@@ -174,11 +257,11 @@ export default function ProjectWorkspacePage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = use(params);
+  const router = useRouter();
   const detail = useApi<ProjectDetail>(`/projects/${encodeURIComponent(id)}`);
   const models = useApi<{ models: ModelOption[] }>("/models");
 
   const project = detail.data?.project;
-  const sessions = detail.data?.sessions ?? [];
   const offline = detail.error && detail.error.status === 0;
   const notFound = detail.error && detail.error.status === 404;
 
@@ -214,6 +297,7 @@ export default function ProjectWorkspacePage({
   const [instrDraft, setInstrDraft] = useState("");
   const [savingField, setSavingField] = useState<string | null>(null);
   const [headerError, setHeaderError] = useState<string | null>(null);
+  const [rootPickerOpen, setRootPickerOpen] = useState(false);
 
   // Seed drafts once per loaded project (display uses the live project fields
   // when not editing, so a post-save reload won't clobber an open editor).
@@ -284,6 +368,36 @@ export default function ProjectWorkspacePage({
     } finally {
       setSavingField(null);
     }
+  }
+  async function setStatus(status: "active" | "archived") {
+    setSavingField("status");
+    setHeaderError(null);
+    try {
+      await patch(`/projects/${encodeURIComponent(id)}`, { status });
+      detail.reload();
+    } catch (err) {
+      setHeaderError(errText(err));
+    } finally {
+      setSavingField(null);
+    }
+  }
+  async function removeProject() {
+    setSavingField("delete");
+    setHeaderError(null);
+    try {
+      await del(`/projects/${encodeURIComponent(id)}`);
+      router.push("/projects"); // the workspace no longer exists
+    } catch (err) {
+      setHeaderError(errText(err));
+      setSavingField(null);
+    }
+  }
+  // Set/change the project FOLDER — the one edit the workspace lacked, which
+  // stranded every file deliverable ("set one on the Projects page first").
+  async function saveRoot(path: string) {
+    setRootPickerOpen(false);
+    if (path === (project?.root ?? "")) return;
+    void savePatch({ root: path }, "root");
   }
 
   const modelValue =
@@ -445,14 +559,40 @@ export default function ProjectWorkspacePage({
                     </button>
                   )}
 
-                  {project.root && (
-                    <div className="mt-2 flex items-center gap-1.5 text-[11px] text-zinc-500">
-                      <Folder size={11} className="shrink-0" />
-                      <span className="truncate font-mono" title={project.root}>
+                  {/* Folder root — editable (was read-only, which stranded file
+                      deliverables). Click to browse + change; set one if none. */}
+                  <div className="mt-2 flex items-center gap-1.5 text-[11px] text-zinc-500">
+                    <Folder size={11} className="shrink-0" />
+                    {project.root ? (
+                      <span className="min-w-0 truncate font-mono" title={project.root}>
                         {project.root}
                       </span>
-                    </div>
-                  )}
+                    ) : (
+                      <span className="italic text-zinc-600">No folder — file tasks need one</span>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => setRootPickerOpen(true)}
+                      disabled={savingField === "root"}
+                      className="inline-flex shrink-0 items-center gap-1 rounded-md border border-white/10 px-1.5 py-0.5 text-[10px] font-medium text-zinc-400 transition-colors hover:border-accent/30 hover:text-accent-soft disabled:opacity-50"
+                      title={project.root ? "Change the project folder" : "Set a project folder"}
+                    >
+                      {savingField === "root" ? (
+                        <LoaderInline label="" />
+                      ) : (
+                        <>
+                          <FolderOpen size={11} /> {project.root ? "Change" : "Set folder"}
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <FilePickerModal
+                    open={rootPickerOpen}
+                    onClose={() => setRootPickerOpen(false)}
+                    onPick={(path: string) => void saveRoot(path)}
+                    pickFolders
+                    title="Choose the project folder"
+                  />
                 </div>
 
                 {/* Controls */}
@@ -466,6 +606,17 @@ export default function ProjectWorkspacePage({
                     className="field text-sm"
                   >
                     <option value="">Project default</option>
+                    {/* A pinned model that isn't currently available must still
+                        SHOW (otherwise the picker reads blank and the pin looks
+                        lost) — surface it as an explicit "unavailable" option. */}
+                    {modelValue &&
+                      !availableModels.some(
+                        (m) => `${m.provider}::${m.model}` === modelValue,
+                      ) && (
+                        <option value={modelValue}>
+                          {project.default_provider} / {project.default_model} (unavailable)
+                        </option>
+                      )}
                     {availableModels.map((m) => (
                       <option key={`${m.provider}::${m.model}`} value={`${m.provider}::${m.model}`}>
                         {m.provider} / {m.model}
@@ -507,6 +658,39 @@ export default function ProjectWorkspacePage({
                         )}
                       </button>
                     ))}
+
+                  {/* Lifecycle: archive / unarchive / delete — previously you
+                      had to bounce back to the list page to reach these. */}
+                  {archived ? (
+                    <button
+                      type="button"
+                      onClick={() => void setStatus("active")}
+                      disabled={savingField === "status"}
+                      title="Restore this project as an active workspace"
+                      className={BTN_GHOST}
+                    >
+                      {savingField === "status" ? (
+                        <LoaderInline label="…" />
+                      ) : (
+                        <>
+                          <ArchiveRestore size={13} /> Unarchive
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <ConfirmButton
+                      onConfirm={() => setStatus("archived")}
+                      label="Archive"
+                      confirmLabel="Archive?"
+                      title={`Archive "${project.name}" — it stops appearing as an active workspace but nothing is deleted`}
+                    />
+                  )}
+                  <ConfirmButton
+                    onConfirm={removeProject}
+                    label="Delete"
+                    confirmLabel="Delete from app?"
+                    title={`Remove "${project.name}" from Iron Jarvis only — your files and folders on this computer are NOT touched`}
+                  />
                 </div>
               </div>
 
@@ -587,16 +771,49 @@ export default function ProjectWorkspacePage({
           <Reveal>
             <div className={showRail ? "grid gap-6 lg:grid-cols-[minmax(0,1fr)_20rem]" : ""}>
               <div className="min-w-0">
-                {tab === "chat" && (
-                  <ProjectChat
-                    projectId={id}
-                    defaultProvider={project.default_provider}
-                    defaultModel={project.default_model}
-                  />
+                {/* An archived project is closed out — don't quietly spawn NEW
+                    chats/tasks into it. Its past work (Board/Activity) stays
+                    readable; running work needs an explicit unarchive. */}
+                {archived && (tab === "chat" || tab === "tasks") ? (
+                  <Card>
+                    <Empty icon={<Archive size={22} />}>
+                      <div className="space-y-3 text-center">
+                        <p>
+                          This project is archived — unarchive it to start new{" "}
+                          {tab === "chat" ? "chats" : "tasks"} here.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => void setStatus("active")}
+                          disabled={savingField === "status"}
+                          className={BTN_PILL}
+                        >
+                          {savingField === "status" ? (
+                            <LoaderInline label="…" />
+                          ) : (
+                            <>
+                              <ArchiveRestore size={13} /> Unarchive project
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </Empty>
+                  </Card>
+                ) : (
+                  <>
+                    {tab === "chat" && (
+                      <ProjectChat
+                        projectId={id}
+                        defaultProvider={project.default_provider}
+                        defaultModel={project.default_model}
+                      />
+                    )}
+                    {tab === "tasks" && <ProjectTasks projectId={id} hasRoot={!!project.root} />}
+                  </>
                 )}
-                {tab === "tasks" && <ProjectTasks projectId={id} hasRoot={!!project.root} />}
                 {tab === "board" && <ProjectBoard projectId={id} />}
-                {tab === "activity" && <ActivityList sessions={sessions} />}
+                {tab === "media" && <ProjectMedia projectId={id} />}
+                {tab === "activity" && <ActivityList projectId={id} />}
               </div>
               {showRail && (
                 <aside className="min-w-0">

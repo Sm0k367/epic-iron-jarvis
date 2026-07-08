@@ -23,5 +23,9 @@ class ArtifactRecord(SQLModel, table=True):
     kind: str = "file"
     path: str = ""
     session_id: str | None = Field(default=None, index=True)
+    #: The project this artifact belongs to (context spine) — resolved from the
+    #: producing session's project, or the active project for direct saves. Lets
+    #: the gallery + a project's Media view scope creations to a workspace.
+    project_id: str | None = Field(default=None, index=True)
     size: int = 0
     created_at: datetime = Field(default_factory=utcnow)

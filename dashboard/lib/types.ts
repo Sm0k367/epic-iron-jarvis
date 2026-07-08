@@ -313,6 +313,15 @@ export interface Project {
   status: string; // active | archived
   created_at: string;
   session_count?: number;
+  /** Knowledge items grounding this project (GET /projects). */
+  knowledge_count?: number;
+  /** Whether the project's folder still exists on disk (GET /projects). A
+   *  moved/deleted root breaks file tasks — the tile flags it. */
+  root_exists?: boolean;
+  /** Per-project pinned defaults (workspace fields, present on GET). */
+  default_provider?: string;
+  default_model?: string;
+  instructions?: string;
   /** Whether this is the ACTIVE project new sessions default into. */
   active?: boolean;
 }

@@ -171,16 +171,22 @@ def thumbnail_for(platform, src: Path, *, size: int = THUMB_SIZE) -> Path | None
     return out
 
 
-def list_media(platform, *, limit: int = 200) -> list[dict[str, Any]]:
+def list_media(
+    platform, *, limit: int = 200, project_id: str | None = None
+) -> list[dict[str, Any]]:
     """Every media artifact, newest first: pixio generations, screenshots,
-    uploads — anything in the store that IS media (by kind or extension)."""
+    uploads — anything in the store that IS media (by kind or extension).
+    ``project_id`` scopes to one project's creations (the workspace Media view)."""
     from ..artifacts.models import ArtifactRecord
 
     limit = max(1, min(int(limit), 1000))
     with session_scope(platform.engine) as db:
+        stmt = select(ArtifactRecord)
+        if project_id:
+            stmt = stmt.where(ArtifactRecord.project_id == project_id)
         rows = list(
             db.exec(
-                select(ArtifactRecord).order_by(
+                stmt.order_by(
                     ArtifactRecord.created_at.desc()  # type: ignore[attr-defined]
                 )
             )
@@ -207,6 +213,7 @@ def list_media(platform, *, limit: int = 200) -> list[dict[str, Any]]:
                 "filename": Path(r.path).name,
                 "size": r.size,
                 "session_id": r.session_id,
+                "project_id": r.project_id,
                 "created_at": r.created_at.isoformat() if r.created_at else None,
                 "url": f"/creative/file/{r.name}",
             }

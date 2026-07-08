@@ -175,12 +175,15 @@ class SpawnAgentTool(Tool):
 
         orch = Orchestrator(self.platform)
         # Subagents INHERIT the parent session's provider/model (like `delegate`)
-        # so the user's chosen model is used end-to-end, not the offline mock.
+        # so the user's chosen model is used end-to-end, not the offline mock —
+        # and its PROJECT, so a spawned child grounds in the parent's workspace
+        # (not whatever project is globally active now).
         parent = orch.get_session(ctx.session_id)
         provider = parent.provider if parent else None
         model = parent.model if parent else None
+        project_id = parent.project_id if parent else None
         child_session = await orch.create_session(
-            task, base_type, provider=provider, model=model
+            task, base_type, provider=provider, model=model, project_id=project_id
         )
         run = await AgentRuntime(self.platform).run(
             child_session, definition, parent_id=ctx.agent_run_id

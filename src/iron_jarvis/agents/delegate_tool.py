@@ -105,8 +105,11 @@ class DelegateTool(Tool):
         parent = orch.get_session(ctx.session_id)
         provider = parent.provider if parent else None
         model = parent.model if parent else None
+        # Spine: the child stays in the PARENT's project (not whatever is globally
+        # active now), so a delegated subtask grounds in the same workspace.
+        project_id = parent.project_id if parent else None
         child_session = await orch.create_session(
-            task, agent_type, provider=provider, model=model
+            task, agent_type, provider=provider, model=model, project_id=project_id
         )
 
         run = await AgentRuntime(self.platform).run(

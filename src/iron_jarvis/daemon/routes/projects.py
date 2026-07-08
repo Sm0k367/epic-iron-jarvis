@@ -23,28 +23,94 @@ from ..schemas import (
 from ...core.db import session_scope
 
 
+def _validate_root(root: str) -> str:
+    """Normalise + validate a project folder root. Empty is allowed (a project
+    without a folder does chat-only tasks). A NON-empty root must be an absolute
+    path to an existing directory — a typo silently degraded every file task,
+    Studio launch, and terminal cwd downstream, so reject it HERE with an honest
+    error. Returns the cleaned root (empty string when none)."""
+    from pathlib import Path
+
+    root = (root or "").strip()
+    if not root:
+        return ""
+    p = Path(root)
+    if not p.is_absolute():
+        raise HTTPException(status_code=400, detail="folder must be an absolute path")
+    if not p.is_dir():
+        raise HTTPException(
+            status_code=400,
+            detail=f"folder does not exist on this machine: {root}",
+        )
+    return str(p)
+
+
+def _validate_project_model(d, provider: str, model: str) -> None:
+    """Reject a per-project default pinned to a provider that isn't installed —
+    otherwise every task in the project 400s at run time on a dead provider.
+    Model ids churn, so we validate the PROVIDER only (the catchable typo);
+    an empty provider clears the pin."""
+    provider = (provider or "").strip()
+    if not provider:
+        return
+    try:
+        known = {p.get("provider") for p in d.platform.providers.health()}
+    except Exception:  # noqa: BLE001 — never let validation crash the patch
+        return
+    if known and provider not in known:
+        raise HTTPException(
+            status_code=400,
+            detail=f"unknown provider '{provider}' — pick one from the model list",
+        )
+
+
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
     @app.get("/projects")
     def list_projects() -> dict[str, Any]:
-        from ...core.models import Project
+        from pathlib import Path
+
+        from sqlalchemy import func
+
+        from ...core.models import Project, ProjectKnowledge
         from ...core.models import Session as SessionModel
 
         active_id = getattr(d.platform.config, "active_project_id", None)
         with session_scope(d.platform.engine) as db:
             projects = list(db.exec(select(Project)))
-            out = []
-            for p in projects:
-                ids = list(
-                    db.exec(select(SessionModel.id).where(SessionModel.project_id == p.id))
-                )
-                out.append(
-                    {
-                        **p.model_dump(),
-                        "session_count": len(ids),
-                        "active": p.id == active_id,
-                    }
-                )
+            # Grouped counts (one query each) instead of an N+1 SELECT per project.
+            # NB: build the dict from .all() rows — dict(result) would trip the
+            # SQLAlchemy Result's mapping protocol (it has .keys()).
+            sess_counts = {
+                pid: cnt
+                for pid, cnt in db.exec(
+                    select(SessionModel.project_id, func.count()).group_by(
+                        SessionModel.project_id
+                    )
+                ).all()
+            }
+            know_counts = {
+                pid: cnt
+                for pid, cnt in db.exec(
+                    select(ProjectKnowledge.project_id, func.count()).group_by(
+                        ProjectKnowledge.project_id
+                    )
+                ).all()
+            }
+        out = []
+        for p in projects:
+            # root_exists lets the tiles flag a moved/deleted folder BEFORE a task
+            # fails on it (the spine is only as good as its folder).
+            root_exists = bool(p.root) and Path(p.root).is_dir()
+            out.append(
+                {
+                    **p.model_dump(),
+                    "session_count": int(sess_counts.get(p.id, 0)),
+                    "knowledge_count": int(know_counts.get(p.id, 0)),
+                    "root_exists": root_exists,
+                    "active": p.id == active_id,
+                }
+            )
         out.sort(key=lambda x: str(x.get("created_at")), reverse=True)
         return {"projects": out}
 
@@ -55,7 +121,8 @@ def register(app: FastAPI, d) -> None:
         name = (body.name or "").strip()
         if not name:
             raise HTTPException(status_code=400, detail="project name is required")
-        project = Project(name=name, brief=(body.brief or "").strip(), root=(body.root or "").strip())
+        root = _validate_root(body.root or "")  # honest 400 on a bad folder
+        project = Project(name=name, brief=(body.brief or "").strip(), root=root)
         with session_scope(d.platform.engine) as db:
             db.add(project)
             db.commit()
@@ -109,12 +176,19 @@ def register(app: FastAPI, d) -> None:
             if body.brief is not None:
                 project.brief = body.brief.strip()
             if body.root is not None:
-                project.root = body.root.strip()
+                project.root = _validate_root(body.root)  # honest 400 on a bad folder
             if body.status is not None:
                 project.status = body.status
             if body.instructions is not None:
                 project.instructions = body.instructions.strip()
             if body.default_provider is not None:
+                _validate_project_model(
+                    d,
+                    body.default_provider,
+                    body.default_model
+                    if body.default_model is not None
+                    else project.default_model,
+                )
                 project.default_provider = body.default_provider.strip()
             if body.default_model is not None:
                 project.default_model = body.default_model.strip()
@@ -136,25 +210,38 @@ def register(app: FastAPI, d) -> None:
         and every file on disk are untouched (the root is just a reference).
         Sessions that were tagged to it keep their history; they simply lose
         the project association."""
-        from ...core.models import Project
+        from ...core.models import ChatThreadRecord, Project, ProjectKnowledge
         from ...core.models import Session as SessionModel
+        from ...workflows.models import WorkflowRunRecord
 
+        knowledge_deleted = 0
         with session_scope(d.platform.engine) as db:
             proj = db.get(Project, project_id)
             if proj is None:
                 raise HTTPException(status_code=404, detail="no such project")
-            # Untag sessions (history preserved, association dropped).
-            for s in db.exec(
-                select(SessionModel).where(SessionModel.project_id == project_id)
+            # Untag sessions, chat threads, and workflow runs (history preserved,
+            # association dropped) — otherwise their project_id dangles at a
+            # project that no longer exists and the UI 404s following it.
+            for model in (SessionModel, ChatThreadRecord, WorkflowRunRecord):
+                for row in db.exec(select(model).where(model.project_id == project_id)):
+                    row.project_id = None
+                    db.add(row)
+            # Knowledge belongs TO the project — delete it (no home without it).
+            for k in db.exec(
+                select(ProjectKnowledge).where(ProjectKnowledge.project_id == project_id)
             ):
-                s.project_id = None
-                db.add(s)
+                db.delete(k)
+                knowledge_deleted += 1
             db.delete(proj)
             db.commit()
         if getattr(d.platform.config, "active_project_id", None) == project_id:
             d.platform.config.active_project_id = None
             d._persist_config(["active_project_id"])
-        return {"deleted": project_id, "files_touched": 0}
+        return {
+            "deleted": project_id,
+            "files_touched": 0,
+            "knowledge_deleted": knowledge_deleted,
+        }
 
     @app.post("/projects/{project_id}/activate")
     def activate_project(project_id: str) -> dict[str, Any]:
@@ -293,7 +380,6 @@ def register(app: FastAPI, d) -> None:
         from pathlib import Path
 
         from ...core.models import Project
-        from ...projects.knowledge import ground
 
         text = (body.text or "").strip()
         if not text:
@@ -329,16 +415,11 @@ def register(app: FastAPI, d) -> None:
                 "current directory. Read and create files here with plain "
                 "relative paths.",
             )
-        # Per-project custom instructions ride at the FRONT — a standing directive
-        # that applies to EVERY task in this project, before the task itself.
-        instructions = (project.instructions or "").strip()
-        if instructions:
-            lines.insert(0, f"Project instructions (follow these): {instructions}")
-        # Grounding: the project's knowledge base (whole base when small, else the
-        # query-relevant items). Empty => no block (degrades gracefully).
-        grounded = ground(d.platform, project.id, text)
-        if grounded.strip():
-            lines.append("Reference knowledge:\n" + grounded)
+        # NOTE: the project's custom instructions, brief, KNOWLEDGE grounding,
+        # and recent-activity are injected by the runtime's _project_context for
+        # EVERY project-tagged session (this task's session is one). We must NOT
+        # repeat them here — doing so duplicated the whole knowledge base into
+        # the prompt and doubled the token cost of every project task.
         target_path: str | None = None
         rel_name: str | None = None
         if output == "chat":
@@ -386,6 +467,41 @@ def register(app: FastAPI, d) -> None:
         if target_path:
             view["target_path"] = target_path
         return view
+
+    @app.get("/projects/{project_id}/deliverable")
+    def check_deliverable(project_id: str, path: str) -> dict[str, Any]:
+        """Does a task's file deliverable ACTUALLY exist on disk? The task strip
+        used to claim 'Saved: <path>' from the INTENDED path — fabricated success
+        when the agent never wrote it. This lets the UI verify the real file
+        (and show its real size) instead. Constrained to the project's folder."""
+        from pathlib import Path
+
+        from ...core.fs_policy import fs_read_ok
+        from ...core.models import Project
+
+        with session_scope(d.platform.engine) as db:
+            project = db.get(Project, project_id)
+        if project is None:
+            raise HTTPException(status_code=404, detail="no such project")
+        root = Path(project.root) if project.root else None
+        if root is None:
+            raise HTTPException(status_code=400, detail="project has no folder")
+        p = Path((path or "").strip())
+        if not p.is_absolute():
+            raise HTTPException(status_code=400, detail="absolute path required")
+        # Never stat arbitrary disk — the target must live under the project root.
+        try:
+            inside = p == root or root.resolve() in p.resolve().parents
+        except OSError:
+            inside = False
+        if not inside:
+            raise HTTPException(status_code=400, detail="path is outside the project folder")
+        ok, reason = fs_read_ok(str(p))
+        if not ok:
+            raise HTTPException(status_code=403, detail=reason)
+        if p.is_file():
+            return {"exists": True, "size": p.stat().st_size, "path": str(p)}
+        return {"exists": False, "size": 0, "path": str(p)}
 
     @app.post("/projects/{project_id}/task/plan")
     async def plan_project_task(project_id: str, body: ToolPlanBody) -> dict[str, Any]:

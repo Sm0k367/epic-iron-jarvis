@@ -368,6 +368,7 @@ class Orchestrator:
             provider=prev.provider,
             model=prev.model,
             self_dev=prev.agent_type is AgentType.MAINTAINER,
+            project_id=prev.project_id,  # a rerun stays in its project (spine)
         )
 
     async def continue_session(self, session_id: str, message: str) -> Session:

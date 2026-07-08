@@ -206,6 +206,25 @@ def create_app(project_root: str | None = None) -> FastAPI:
 
         _rehydrate_step("reconcile_sessions", orchestrator.reconcile_interrupted_sessions)
         _rehydrate_step("rehydrate_reviews", orchestrator.rehydrate_reviews)
+
+        def _revalidate_active_project() -> None:
+            """The active project (context spine) must still exist and be active
+            — a manual DB edit, a restore, or an out-of-band delete can leave
+            active_project_id dangling, which would then tag every new session
+            into a ghost project. Clear it if it's gone or archived."""
+            pid = getattr(platform.config, "active_project_id", None)
+            if not pid:
+                return
+            from ..core.db import session_scope as _scope
+            from ..core.models import Project as _Project
+
+            with _scope(platform.engine) as _db:
+                proj = _db.get(_Project, pid)
+            if proj is None or proj.status != "active":
+                platform.config.active_project_id = None
+                d._persist_config(["active_project_id"])
+
+        _rehydrate_step("revalidate_active_project", _revalidate_active_project)
         if platform.intent is not None:  # reset proposals stranded 'executing' by a crash
             _rehydrate_step("reconcile_proposals", platform.intent.reconcile_executing_proposals)
 
