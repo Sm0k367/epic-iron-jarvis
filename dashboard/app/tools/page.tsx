@@ -121,13 +121,29 @@ interface McpServer {
   command: string;
   args: string[];
   env: Record<string, string>;
+  /** How many of this server's tools are live in the registry (0 = not loaded). */
+  tools_loaded: number;
+  /** Short names of the loaded tools, e.g. ["send_email","list_messages"]. */
+  tool_names: string[];
+  /** When true, agents may run this server's tools without a prompt. */
+  auto_approve?: boolean;
 }
 
 /** Response of POST /mcp/servers. `note` is set when live-load failed. */
 interface McpAddResult {
+  name: string;
   added: boolean;
   tools_loaded: number;
-  note?: string;
+  auto_approve: boolean;
+  note: string | null;
+}
+
+/** Response of POST /mcp/servers/{name}/test — a live, read-only tool listing. */
+interface McpTestResult {
+  ok: boolean;
+  count: number;
+  tools: string[];
+  error: string | null;
 }
 
 /** Response payload of POST /mcp/suggest. */
@@ -494,6 +510,41 @@ export default function ToolsPage() {
   const [mcpError, setMcpError] = useState<string | null>(null);
   const [mcpOk, setMcpOk] = useState<string | null>(null);
 
+  // Auto-approve: applies to whatever pack you connect next (default OFF).
+  const [autoApprove, setAutoApprove] = useState(false);
+
+  // Per-server "Test" (live tool listing) — busy name + results keyed by name.
+  const [mcpTestBusy, setMcpTestBusy] = useState<string | null>(null);
+  const [mcpTests, setMcpTests] = useState<Record<string, McpTestResult>>({});
+
+  /** POST /mcp/servers/{name}/test — connect now, list tools, show inline. */
+  async function testServer(serverName: string) {
+    setMcpTestBusy(serverName);
+    setMcpTests((t) => {
+      const next = { ...t };
+      delete next[serverName];
+      return next;
+    });
+    try {
+      const res = await post<McpTestResult>(
+        `/mcp/servers/${encodeURIComponent(serverName)}/test`,
+      );
+      setMcpTests((t) => ({ ...t, [serverName]: res }));
+    } catch (err) {
+      setMcpTests((t) => ({
+        ...t,
+        [serverName]: {
+          ok: false,
+          count: 0,
+          tools: [],
+          error: err instanceof ApiError ? err.message : String(err),
+        },
+      }));
+    } finally {
+      setMcpTestBusy(null);
+    }
+  }
+
   // Which catalog entry has its config (placeholders / env keys) form open.
   const [cfgId, setCfgId] = useState<string | null>(null);
   const [cfgValues, setCfgValues] = useState<Record<string, string>>({});
@@ -526,13 +577,17 @@ export default function ToolsPage() {
         command: cmd,
         args,
         env,
+        auto_approve: autoApprove,
       });
+      const approveNote = res.auto_approve
+        ? " Agents may use it without asking after the next restart."
+        : "";
       setMcpOk(
         res.note
-          ? `Tool pack "${serverName}" connected — ${res.note}`
+          ? `Tool pack "${serverName}" connected — ${res.note}${approveNote}`
           : `Tool pack "${serverName}" connected — ${res.tools_loaded} tool${
               res.tools_loaded === 1 ? "" : "s"
-            } ready to use.`,
+            } ready to use.${approveNote}`,
       );
       setCfgId(null);
       reloadServers();
@@ -892,6 +947,27 @@ export default function ToolsPage() {
             </div>
           )}
 
+          {/* Auto-approve — applies to whatever pack you connect next ------ */}
+          <label className="mb-4 flex cursor-pointer items-start gap-3 rounded-xl border border-white/[0.06] bg-white/[0.015] px-4 py-3 transition-colors hover:border-white/10">
+            <input
+              type="checkbox"
+              checked={autoApprove}
+              onChange={(e) => setAutoApprove(e.target.checked)}
+              className="mt-0.5 h-4 w-4 shrink-0 accent-accent"
+            />
+            <span className="min-w-0 text-sm">
+              <span className="font-medium text-zinc-200">
+                Let agents use this without asking
+              </span>
+              <span className="mt-1 block text-[12px] leading-relaxed text-zinc-500">
+                When on, autonomous agents may run this pack&apos;s tools without a
+                prompt — chat already approves tools when you arm them. It applies after
+                the next Iron Jarvis restart and trusts every tool this pack exposes.
+                Leave off (the default) to keep approving each use.
+              </span>
+            </span>
+          </label>
+
           {/* Catalog grid ------------------------------------------------- */}
           <div className="mb-2.5">
             <SectionLabel>Popular packs</SectionLabel>
@@ -1143,37 +1219,111 @@ export default function ToolsPage() {
             </p>
           ) : (
             <div className="space-y-2">
-              {servers.map((s) => (
-                <div
-                  key={s.name}
-                  className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-white/[0.06] bg-white/[0.015] px-3.5 py-2.5"
-                >
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <Server size={13} className="text-accent-soft" />
-                      <span className="font-mono text-sm font-semibold text-zinc-100">
-                        {s.name}
-                      </span>
-                      {Object.keys(s.env).length > 0 && (
-                        <Badge
-                          value={`${Object.keys(s.env).length} env`}
-                          tone="violet"
+              {servers.map((s) => {
+                const loaded = s.tools_loaded ?? 0;
+                const names = s.tool_names ?? [];
+                const testing = mcpTestBusy === s.name;
+                const test = mcpTests[s.name];
+                return (
+                  <div
+                    key={s.name}
+                    className="rounded-xl border border-white/[0.06] bg-white/[0.015] px-3.5 py-2.5"
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <Server size={13} className="text-accent-soft" />
+                          <span className="font-mono text-sm font-semibold text-zinc-100">
+                            {s.name}
+                          </span>
+                          <Badge
+                            value={`${loaded} tool${loaded === 1 ? "" : "s"} loaded`}
+                            tone={loaded > 0 ? "green" : "slate"}
+                          />
+                          {s.auto_approve && (
+                            <Badge value="auto-approve" tone="amber" />
+                          )}
+                          {Object.keys(s.env).length > 0 && (
+                            <Badge
+                              value={`${Object.keys(s.env).length} env`}
+                              tone="violet"
+                            />
+                          )}
+                        </div>
+                        <div className="mt-1 overflow-x-auto">
+                          <code className="whitespace-pre font-mono text-[11px] text-zinc-500">
+                            {[s.command, ...s.args].join(" ")}
+                          </code>
+                        </div>
+                      </div>
+                      <div className="flex shrink-0 items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => void testServer(s.name)}
+                          disabled={testing}
+                          title={`Test "${s.name}" — connect now and list its tools`}
+                          className="inline-flex items-center gap-1 rounded-lg border border-accent/30 bg-accent/[0.08] px-2 py-1 text-[11px] font-medium text-accent-soft transition-colors hover:bg-accent/[0.14] disabled:opacity-50"
+                        >
+                          {testing ? (
+                            <LoaderInline label="Testing…" />
+                          ) : (
+                            <>
+                              <Radio size={12} /> Test
+                            </>
+                          )}
+                        </button>
+                        <ConfirmButton
+                          onConfirm={() => removeServer(s.name)}
+                          label="Delete"
+                          title={`Disconnect tool pack "${s.name}"`}
                         />
-                      )}
+                      </div>
                     </div>
-                    <div className="mt-1 overflow-x-auto">
-                      <code className="whitespace-pre font-mono text-[11px] text-zinc-500">
-                        {[s.command, ...s.args].join(" ")}
-                      </code>
-                    </div>
+
+                    {/* loaded tool names, as chips */}
+                    {names.length > 0 && (
+                      <div className="mt-2.5 flex flex-wrap gap-1">
+                        {names.map((n) => (
+                          <span
+                            key={n}
+                            className="rounded-md border border-white/[0.06] bg-white/[0.03] px-1.5 py-0.5 font-mono text-[11px] text-zinc-300"
+                          >
+                            {n}
+                          </span>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* inline Test result */}
+                    {test && (
+                      <div className="mt-2.5">
+                        {test.ok ? (
+                          <div className="rounded-lg border border-emerald-500/25 bg-emerald-500/[0.06] px-3 py-2">
+                            <div className="flex items-center gap-1.5 text-[12px] font-medium text-emerald-300">
+                              <Check size={13} /> Connected — {test.count} tool
+                              {test.count === 1 ? "" : "s"} available now
+                            </div>
+                            {test.tools.length > 0 && (
+                              <div className="mt-2 flex flex-wrap gap-1">
+                                {test.tools.map((n) => (
+                                  <span
+                                    key={n}
+                                    className="rounded-md border border-emerald-500/20 bg-emerald-500/[0.08] px-1.5 py-0.5 font-mono text-[11px] text-emerald-200"
+                                  >
+                                    {n}
+                                  </span>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          <ErrorNote>{test.error ?? "Test failed."}</ErrorNote>
+                        )}
+                      </div>
+                    )}
                   </div>
-                  <ConfirmButton
-                    onConfirm={() => removeServer(s.name)}
-                    label="Delete"
-                    title={`Disconnect tool pack "${s.name}"`}
-                  />
-                </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </Card>

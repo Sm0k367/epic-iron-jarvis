@@ -466,6 +466,11 @@ class McpServerBody(BaseModel):
     args: list[str] = []
     env: dict[str, str] = {}
     cwd: str | None = None
+    #: When true, the headless daemon runs this server's tools without an
+    #: interactive prompt, so autonomous agents can use it (chat already
+    #: approves-by-arming). Coarse — enabling it trusts every connected MCP
+    #: tool — and applied at the next daemon restart. Default off (fail-closed).
+    auto_approve: bool = False
 
 
 class McpSuggestBody(BaseModel):

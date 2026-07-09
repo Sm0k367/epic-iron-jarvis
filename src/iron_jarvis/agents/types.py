@@ -52,6 +52,12 @@ _LEARNING_TOOLS = ["remember_preference", "recall_lessons"]
 # Departments: the shared blackboard lets sibling agents post findings and
 # address each other instead of only summarizing upward. Low-risk + allowed.
 _COLLAB_TOOLS = ["blackboard_post", "blackboard_read", "message_agent"]
+# External capability: "mcp:*" is a sentinel the registry expands to every
+# connected external MCP tool (Gmail/Drive/GitHub/...), so an agent can reach
+# integrations the user configured without each dynamic tool name being known
+# at authoring time. Execution is still gated by the ``mcp_call`` permission
+# (ask by default; a per-server auto_approve or chat-arming grants it).
+_EXTERNAL_TOOLS = ["mcp:*"]
 
 # A warm, human voice shared across agents. Accumulated lessons are appended to
 # this prompt at runtime (see LearningEngine.apply_to_prompt), so it improves
@@ -85,7 +91,7 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         ),
         tools=(
             _FILE_TOOLS + ["shell"] + _KNOWLEDGE_TOOLS + _SELF_SERVICE_TOOLS
-            + _DOCUMENT_TOOLS + _LEARNING_TOOLS + _COLLAB_TOOLS
+            + _DOCUMENT_TOOLS + _LEARNING_TOOLS + _COLLAB_TOOLS + _EXTERNAL_TOOLS
         ),
     ),
     AgentType.PLANNER: AgentDefinition(
@@ -97,7 +103,7 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         ),
         tools=(
             _FILE_TOOLS + _KNOWLEDGE_TOOLS + _SELF_SERVICE_TOOLS
-            + _DOCUMENT_TOOLS + _LEARNING_TOOLS + _COLLAB_TOOLS
+            + _DOCUMENT_TOOLS + _LEARNING_TOOLS + _COLLAB_TOOLS + _EXTERNAL_TOOLS
         ),
     ),
     AgentType.REVIEWER: AgentDefinition(
@@ -122,7 +128,7 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         tools=[
             "delegate", "read_file", "list_files", "read_document", "recall_lessons",
             "list_agents", "spawn_agent", "notify",
-        ] + _COLLAB_TOOLS,
+        ] + _COLLAB_TOOLS + _EXTERNAL_TOOLS,
     ),
     AgentType.RESEARCHER: AgentDefinition(
         type=AgentType.RESEARCHER,
@@ -137,6 +143,7 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
             + ["web_search"]
             + _DOCUMENT_TOOLS + _KNOWLEDGE_TOOLS + _LEARNING_TOOLS
             + ["browse", "web_extract", "computer_use_status"] + _COLLAB_TOOLS
+            + _EXTERNAL_TOOLS
         ),
     ),
     AgentType.MEMORY: AgentDefinition(
@@ -186,7 +193,7 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
             + ["notify", "integration_list", "integration_test"]
             + ["create_agent", "list_agents", "spawn_agent"]
             + ["browse", "web_extract", "web_action", "computer_use_status"]
-            + _COLLAB_TOOLS
+            + _COLLAB_TOOLS + _EXTERNAL_TOOLS
         ),
     ),
 }

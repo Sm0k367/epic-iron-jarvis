@@ -490,14 +490,34 @@ def build_platform(
 
     # External MCP servers (Gmail/Drive/GitHub/...) as native tools. Empty
     # config (the default) is a safe no-op; an unreachable server is skipped.
+    # Registered with mcp=True so the ``mcp:*`` allowlist sentinel reaches them
+    # from the agent loop AND so they survive a restart identically to how they
+    # were live-loaded when first added (previously boot-loaded MCP tools were
+    # registered plain — invisible to every agent's tool loadout).
     for tool in mcp_tools(getattr(config, "mcp_servers", None), secret_resolver=secrets.get):
-        registry.register(tool)
+        registry.register(tool, mcp=True)
 
     # Self-correcting learning loop: feedback + reflections become lessons that
     # get injected into every future agent prompt (gets better each interaction).
     learning = LearningEngine(engine)
     for tool in learning_tools(learning):
         registry.register(tool)
+
+    # MCP auto-approve: a server the user explicitly marked trusted lets the
+    # headless daemon run its tools without an interactive prompt, so autonomous
+    # agents (and the Reflex Loop) can actually USE it — not just chat, which
+    # already approves-by-arming. Opt-in per server, default off. Coarse by
+    # design: mcp_call is one shared perm key, so trusting any server trusts
+    # every connected MCP tool (applied at boot; add a server then restart).
+    _mcp_auto = any(
+        (s or {}).get("auto_approve")
+        for s in (getattr(config, "mcp_servers", None) or [])
+    )
+    if ask_resolver is not None and _mcp_auto:
+        _base_ask = ask_resolver
+
+        def ask_resolver(name: str, args: dict, _b=_base_ask) -> bool:  # type: ignore[misc]
+            return True if name == "mcp_call" else _b(name, args)
 
     permissions = PermissionEngine(config.permissions, ask_resolver=ask_resolver)
 

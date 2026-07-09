@@ -194,8 +194,9 @@ const HANDOFF_CLIP = 600; // chars kept per message
 
 // "+" tool menu grouping: bucket the flat registry into a few friendly
 // categories by name/description. Heuristic — "other" catches the rest.
-type ToolCategory = "files" | "web" | "media" | "documents" | "other";
+type ToolCategory = "integrations" | "files" | "web" | "media" | "documents" | "other";
 const TOOL_CATEGORY_ORDER: ToolCategory[] = [
+  "integrations",
   "files",
   "web",
   "media",
@@ -203,15 +204,19 @@ const TOOL_CATEGORY_ORDER: ToolCategory[] = [
   "other",
 ];
 const TOOL_CATEGORY_LABEL: Record<ToolCategory, string> = {
+  integrations: "Integrations (MCP)",
   files: "Files",
   web: "Web",
   media: "Media",
   documents: "Documents",
   other: "Other",
 };
-// Checked in order — first match wins. Media/documents come before the broad
-// Files bucket so "read_pdf" / "image_convert" don't fall into it.
+// Checked in order — first match wins. Integrations (external MCP tools, named
+// mcp__server__tool) come first so a connected Gmail/Drive tool never lands in
+// a generic bucket. Media/documents precede the broad Files bucket so
+// "read_pdf" / "image_convert" don't fall into it.
 const TOOL_CATEGORY_RULES: { cat: ToolCategory; rx: RegExp }[] = [
+  { cat: "integrations", rx: /^mcp__/ },
   {
     cat: "media",
     rx: /(image|video|audio|media|pixio|vision|song|music|photo|picture|render|\bsfx\b|\btts\b|\bvoice\b|speech)/,

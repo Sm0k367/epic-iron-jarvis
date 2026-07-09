@@ -22,17 +22,25 @@ class ToolRegistry:
         #: names of agent/user-authored (custom) tools, expanded by the
         #: ``"custom:*"`` allowlist sentinel so every agent can reach them.
         self._custom: set[str] = set()
+        #: names of external MCP tools (``mcp__<server>__<tool>``), expanded by
+        #: the ``"mcp:*"`` allowlist sentinel. Kept SEPARATE from ``_custom`` so
+        #: an agent can opt into user-authored tools without also inheriting
+        #: every connected external integration (Gmail/Drive/GitHub/...).
+        self._mcp: set[str] = set()
 
-    def register(self, tool: Tool, custom: bool = False) -> None:
+    def register(self, tool: Tool, custom: bool = False, mcp: bool = False) -> None:
         if not tool.name:
             raise ValueError("tool must have a name")
         self._tools[tool.name] = tool
         if custom:
             self._custom.add(tool.name)
+        if mcp:
+            self._mcp.add(tool.name)
 
     def unregister(self, name: str) -> bool:
-        """Remove a tool (used when a custom tool is deleted). False if absent."""
+        """Remove a tool (used when a custom or MCP tool is deleted). False if absent."""
         self._custom.discard(name)
+        self._mcp.discard(name)
         return self._tools.pop(name, None) is not None
 
     def get(self, name: str) -> Tool | None:
@@ -44,14 +52,25 @@ class ToolRegistry:
     def custom_names(self) -> list[str]:
         return sorted(self._custom)
 
+    def mcp_names(self, server: str | None = None) -> list[str]:
+        """Registered external MCP tool names. With ``server`` given, only the
+        tools of ``mcp__<server>__*`` (used to count/unload one server's tools)."""
+        if server is None:
+            return sorted(self._mcp)
+        prefix = f"mcp__{server}__"
+        return sorted(n for n in self._mcp if n.startswith(prefix))
+
     def specs(self, allowed: list[str] | None = None) -> list[dict[str, Any]]:
         tools = list(self._tools.values())
         if allowed is not None:
             allow = set(allowed)
             wild = "custom:*" in allow  # reach every custom tool, by name unknown
+            mcp_wild = "mcp:*" in allow  # reach every connected MCP tool
             tools = [
                 t for t in tools
-                if t.name in allow or (wild and t.name in self._custom)
+                if t.name in allow
+                or (wild and t.name in self._custom)
+                or (mcp_wild and t.name in self._mcp)
             ]
         return [t.spec() for t in tools]
 

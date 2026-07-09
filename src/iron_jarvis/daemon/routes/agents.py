@@ -409,7 +409,43 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/mcp/servers")
     def mcp_servers() -> dict[str, Any]:
-        return {"servers": list(getattr(d.platform.config, "mcp_servers", None) or [])}
+        """Configured MCP servers, each annotated with how many of its tools are
+        currently LIVE in the registry (0 = configured but not loaded — usually a
+        server that failed to connect, or was added and needs a restart)."""
+        servers = []
+        for s in list(getattr(d.platform.config, "mcp_servers", None) or []):
+            name = s.get("name") or ""
+            loaded = d.platform.registry.mcp_names(name) if name else []
+            servers.append(
+                {
+                    **s,
+                    "tools_loaded": len(loaded),
+                    "tool_names": [n.split("__", 2)[-1] for n in loaded],
+                }
+            )
+        return {"servers": servers}
+
+    @app.post("/mcp/servers/{name}/test")
+    def test_mcp_server(name: str) -> dict[str, Any]:
+        """Connect to a configured server RIGHT NOW and list its tools — proves
+        the command/URL + auth work without waiting for a restart. Read-only."""
+        servers = list(getattr(d.platform.config, "mcp_servers", None) or [])
+        cfg = next((s for s in servers if s.get("name") == name), None)
+        if cfg is None:
+            raise HTTPException(status_code=404, detail="no such server")
+        from ...mcp.tools import mcp_tools as _mcp_tools
+
+        try:
+            tools = _mcp_tools([cfg], secret_resolver=d.platform.secrets.get)
+        except Exception as exc:  # noqa: BLE001 — report, never crash
+            return {"ok": False, "error": f"{type(exc).__name__}: {exc}", "tools": []}
+        names = [t.name.split("__", 2)[-1] for t in tools]
+        return {
+            "ok": bool(tools),
+            "count": len(tools),
+            "tools": names,
+            "error": None if tools else "connected but the server advertised no tools",
+        }
 
     @app.post("/mcp/servers")
     def add_mcp_server(body: McpServerBody) -> dict[str, Any]:
@@ -431,25 +467,37 @@ def register(app: FastAPI, d) -> None:
             "args": [str(a) for a in body.args],
             "env": dict(body.env or {}),
             **({"cwd": body.cwd} if body.cwd else {}),
+            **({"auto_approve": True} if body.auto_approve else {}),
         }
         servers.append(cfg)
         d.platform.config.mcp_servers = servers
         d._persist_config(["mcp_servers"])
-        # Best-effort LIVE load so its tools appear without a restart.
+        # Best-effort LIVE load so its tools appear without a restart. Registered
+        # with mcp=True so the ``mcp:*`` sentinel reaches them from the agent loop
+        # and they survive the next restart (boot re-registers the same way).
         loaded = 0
         try:
             from ...mcp.tools import mcp_tools as _mcp_tools
 
             for tool in _mcp_tools([cfg], secret_resolver=d.platform.secrets.get):
-                d.platform.registry.register(tool, custom=True)
+                d.platform.registry.register(tool, mcp=True)
                 loaded += 1
         except Exception:  # noqa: BLE001 — persisted config still loads on restart
             loaded = 0
+        # auto_approve is applied when the resolver is built at boot, so a server
+        # added live with auto_approve won't be trusted by headless agents until
+        # the next restart — be honest about that.
+        note = None
+        if not loaded:
+            note = "saved — restart the daemon to load its tools"
+        elif body.auto_approve:
+            note = "loaded — restart the daemon so autonomous agents may use it without asking"
         return {
             "name": name,
             "added": True,
             "tools_loaded": loaded,
-            "note": None if loaded else "saved — restart the daemon to load its tools",
+            "auto_approve": bool(body.auto_approve),
+            "note": note,
         }
 
     @app.delete("/mcp/servers/{name}")
@@ -460,7 +508,14 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="no such server")
         d.platform.config.mcp_servers = kept
         d._persist_config(["mcp_servers"])
-        return {"removed": name, "note": "restart the daemon to fully unload its tools"}
+        # Unregister its live tools NOW so they disappear from every agent's
+        # loadout immediately (they won't come back on restart either — the
+        # config no longer lists the server).
+        unloaded = 0
+        for tool_name in d.platform.registry.mcp_names(name):
+            if d.platform.registry.unregister(tool_name):
+                unloaded += 1
+        return {"removed": name, "tools_unloaded": unloaded}
 
     @app.post("/mcp/suggest")
     async def suggest_mcp_server(body: McpSuggestBody) -> dict[str, Any]:
