@@ -575,3 +575,27 @@ class GoalPatch(BaseModel):
 
 class KillBody(BaseModel):
     enabled: bool = True  # engage (True) or release (False) the global kill switch
+
+
+class RemoteAgentCreate(BaseModel):
+    """Register a remote agent the user runs elsewhere (§11/§12)."""
+
+    name: str
+    base_url: str
+    kind: str = "http-task"  # http-task | openai-chat
+    model: str = ""  # model id for openai-chat endpoints
+    token: str = ""  # bearer credential — stored in the vault, never returned
+    enabled: bool = True
+    timeout_s: int = 120
+
+
+class RemoteAgentRun(BaseModel):
+    task: str
+
+
+class AgentPatch(BaseModel):
+    """Edit a dynamic agent in place (only the provided fields change)."""
+
+    system_prompt: str | None = None
+    tools: list[str] | None = None
+    description: str | None = None

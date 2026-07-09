@@ -7,6 +7,7 @@ reached through ``d`` (see the deps object built in create_app).
 from __future__ import annotations
 
 from fastapi import FastAPI, HTTPException
+from pydantic import BaseModel
 from sqlmodel import select
 from typing import Any
 
@@ -21,6 +22,14 @@ from ..schemas import (
     ToolPlanBody,
 )
 from ...core.db import session_scope
+
+
+class ProjectKnowledgePatch(BaseModel):
+    """Rename (``name``) or edit (``text``) one knowledge item. Only the fields
+    provided change; editing ``text`` re-embeds the item (mirrors add_knowledge)."""
+
+    name: str | None = None
+    text: str | None = None
 
 
 def _validate_root(root: str) -> str:
@@ -356,6 +365,65 @@ def register(app: FastAPI, d) -> None:
                 raise HTTPException(status_code=404, detail="no such project")
         items = list_knowledge(d.platform, project_id)
         return {"knowledge": items, "count": len(items)}
+
+    @app.get("/projects/{project_id}/knowledge/{knowledge_id}")
+    def get_project_knowledge(
+        project_id: str, knowledge_id: str
+    ) -> dict[str, Any]:
+        """Full text (+ name/kind) of one knowledge item, for the viewer. 404 if
+        it doesn't belong to the project (never leak another project's item)."""
+        from ...core.models import ProjectKnowledge
+
+        with session_scope(d.platform.engine) as db:
+            rec = db.get(ProjectKnowledge, knowledge_id)
+            if rec is None or rec.project_id != project_id:
+                raise HTTPException(status_code=404, detail="no such knowledge item")
+            return {
+                "id": rec.id,
+                "name": rec.name,
+                "kind": rec.kind,
+                "text": rec.text,
+                "size": rec.size,
+                "created_at": rec.created_at.isoformat() if rec.created_at else None,
+            }
+
+    @app.patch("/projects/{project_id}/knowledge/{knowledge_id}")
+    def patch_project_knowledge(
+        project_id: str, knowledge_id: str, body: ProjectKnowledgePatch
+    ) -> dict[str, Any]:
+        """Rename and/or edit one knowledge item. Editing text RE-EMBEDS it so
+        retrieval stays accurate (mirrors add_knowledge). 404 if it isn't in the
+        project; 400 if an edit blanks the text."""
+        import json
+
+        from ...core.models import ProjectKnowledge
+        from ...projects.knowledge import _embed
+
+        with session_scope(d.platform.engine) as db:
+            rec = db.get(ProjectKnowledge, knowledge_id)
+            if rec is None or rec.project_id != project_id:
+                raise HTTPException(status_code=404, detail="no such knowledge item")
+            if body.name is not None and body.name.strip():
+                rec.name = body.name.strip()[:200]
+            if body.text is not None:
+                new_text = body.text.strip()
+                if not new_text:
+                    raise HTTPException(status_code=400, detail="knowledge text is empty")
+                if new_text != rec.text:
+                    embedder = getattr(d.platform, "embedder", None)
+                    rec.text = new_text
+                    rec.size = len(new_text)
+                    rec.embedding_json = json.dumps(_embed(embedder, new_text))
+            db.add(rec)
+            db.commit()
+            db.refresh(rec)
+            return {
+                "id": rec.id,
+                "name": rec.name,
+                "kind": rec.kind,
+                "text": rec.text,
+                "size": rec.size,
+            }
 
     @app.delete("/projects/{project_id}/knowledge/{knowledge_id}")
     def delete_project_knowledge(

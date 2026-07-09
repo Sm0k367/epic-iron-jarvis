@@ -20,6 +20,7 @@ import {
   X,
 } from "lucide-react";
 import { get, post, ApiError, API_BASE, ijToken } from "@/lib/api";
+import { useApi } from "@/lib/useApi";
 import type { SessionDetail, SessionView } from "@/lib/types";
 import { Card, Badge, ErrorNote, LoaderInline } from "@/components/ui";
 
@@ -114,6 +115,43 @@ export function ProjectTasks({
   const taskDone = taskSession !== null && TERMINAL_STATUSES.has(taskSession.status);
 
   const base = `/projects/${encodeURIComponent(projectId)}`;
+  // Where the active run id is stashed so it survives a tab-switch/reload.
+  const runKey = `ij:projtask:${projectId}`;
+
+  // Task history: this project's recent runs (GET /projects/{id} → sessions).
+  const { data: histData, reload: reloadHistory } = useApi<{ sessions: SessionView[] }>(
+    base,
+  );
+  const history = histData?.sessions ?? [];
+
+  // Rehydrate the active run on mount (per project) so a running task keeps its
+  // live strip across a reload; clearing taskSession forces a fresh poll.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    let saved: ProjectTaskStart | null = null;
+    try {
+      const raw = window.localStorage.getItem(runKey);
+      if (raw) saved = JSON.parse(raw) as ProjectTaskStart;
+    } catch {
+      saved = null;
+    }
+    if (saved?.id) {
+      setTaskRun(saved);
+      setTaskSession(null);
+      setTaskArtifacts(null);
+      setDeliverable(null);
+    } else {
+      setTaskRun(null);
+      setTaskSession(null);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [projectId]);
+
+  // Refresh the history once a run reaches a terminal state (it's now in it).
+  useEffect(() => {
+    if (taskDone) reloadHistory();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskDone]);
 
   // Watch the started session every 2s until terminal.
   useEffect(() => {
@@ -193,6 +231,12 @@ export function ProjectTasks({
       if (taskOutput !== "chat" && taskFilename.trim()) body.filename = taskFilename.trim();
       const started = await post<ProjectTaskStart>(`${base}/task`, body);
       setTaskRun(started); // replaces any previous strip
+      try {
+        // Persist so the live run survives a tab-switch/reload (rehydrated on mount).
+        window.localStorage.setItem(runKey, JSON.stringify(started));
+      } catch {
+        /* storage unavailable — the run still works, just won't rehydrate */
+      }
       setTaskSession(started); // flat SessionView snapshot until the first poll
       setTaskPollError(null);
       setTaskArtifacts(null); // new run → re-fetch artifacts when it finishes
@@ -537,6 +581,36 @@ export function ProjectTasks({
                 </div>
               </div>
             )}
+          </div>
+        )}
+
+        {/* Task history — this project's recent runs, not just the last one. */}
+        {history.length > 0 && (
+          <div className="border-t hairline pt-2.5">
+            <div className="mb-1.5 text-[11px] uppercase tracking-[0.1em] text-zinc-500">
+              Recent runs
+            </div>
+            <ul className="space-y-0.5">
+              {history
+                .filter((s) => s.id !== taskRun?.id)
+                .slice(0, 8)
+                .map((s) => (
+                  <li key={s.id}>
+                    <Link
+                      href={`/sessions/${encodeURIComponent(s.id)}`}
+                      className="group flex items-center gap-2 rounded-md px-1.5 py-1 transition-colors hover:bg-white/[0.03]"
+                    >
+                      <Badge value={s.status} />
+                      <span className="min-w-0 flex-1 truncate text-xs text-zinc-400">
+                        {s.summary || s.task}
+                      </span>
+                      <span className="shrink-0 text-[11px] text-accent-soft opacity-0 transition-opacity group-hover:opacity-100">
+                        open →
+                      </span>
+                    </Link>
+                  </li>
+                ))}
+            </ul>
           </div>
         )}
       </div>

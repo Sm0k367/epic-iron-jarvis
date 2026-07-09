@@ -3,9 +3,23 @@ export function shortId(id: string | null | undefined): string {
   return id.length > 14 ? id.slice(0, 14) + "…" : id;
 }
 
+/**
+ * The daemon stores naive UTC timestamps (no zone suffix). A zone-less ISO
+ * string is parsed as LOCAL time by the browser, so a run that finished hours
+ * ago in a UTC-offset timezone reads as "now". Treat a zone-less timestamp as
+ * UTC by appending 'Z' before parsing. Fixes relative + clock times everywhere.
+ */
+export function normalizeIso(iso: string): string {
+  // Has a time component (T or space + HH:MM) but no zone (Z or ±HH:MM)?
+  if (/[T ]\d{2}:\d{2}/.test(iso) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(iso)) {
+    return iso.replace(" ", "T") + "Z";
+  }
+  return iso;
+}
+
 export function timeAgo(iso: string | null | undefined): string {
   if (!iso) return "—";
-  const t = new Date(iso).getTime();
+  const t = new Date(normalizeIso(iso)).getTime();
   if (Number.isNaN(t)) return iso;
   const s = Math.floor((Date.now() - t) / 1000);
   if (s < 0) return "now";
@@ -19,7 +33,7 @@ export function timeAgo(iso: string | null | undefined): string {
 
 export function clockTime(iso: string | null | undefined): string {
   if (!iso) return "—";
-  const d = new Date(iso);
+  const d = new Date(normalizeIso(iso));
   if (Number.isNaN(d.getTime())) return iso;
   return d.toLocaleTimeString();
 }

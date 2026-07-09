@@ -43,6 +43,8 @@ from .workflows import models as _wf_models  # noqa: F401  (registers WorkflowRu
 
 # Robust feature set (each importing its package registers any SQLModel tables).
 from .agents import dynamic_models as _dyn_models  # noqa: F401
+from .agents import remote as _remote_models  # noqa: F401  (registers RemoteAgentRecord)
+from .agents.remote import register_remote_agent_tool
 from .agents.agent_tools import agent_management_tools
 from .agents.dynamic import DynamicAgentRegistry
 from .blackboard import BlackboardStore, blackboard_tools
@@ -573,6 +575,11 @@ def build_platform(
     platform.agents_registry = DynamicAgentRegistry(engine).load()
     for tool in agent_management_tools(platform, platform.agents_registry):
         platform.registry.register(tool)
+
+    # Remote agents (agents the user runs ELSEWHERE — a Hermes on another box,
+    # an OpenAI-compatible endpoint): expose the delegate_remote tool so an
+    # agent can hand a task to a registered, enabled remote and get its result.
+    register_remote_agent_tool(platform)
 
     # Dynamic tools (agents that author REUSABLE tools): load persisted custom
     # tools into the live registry (marked custom, so every agent reaches them via

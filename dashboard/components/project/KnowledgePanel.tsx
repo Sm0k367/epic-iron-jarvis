@@ -9,6 +9,7 @@ import {
   BookOpen,
   Check,
   FileText,
+  Pencil,
   Plus,
   StickyNote,
   Trash2,
@@ -16,7 +17,7 @@ import {
   X,
 } from "lucide-react";
 import { useApi } from "@/lib/useApi";
-import { post, del, ApiError } from "@/lib/api";
+import { get, post, patch, del, ApiError } from "@/lib/api";
 import { Card, Empty, ErrorNote, LoaderInline, SkeletonRows } from "@/components/ui";
 import { timeAgo } from "@/lib/format";
 
@@ -26,6 +27,11 @@ interface KnowledgeItem {
   kind: string; // "note" | "file"
   size: number;
   created_at: string;
+}
+
+/** GET …/knowledge/{id} — the full item (metadata + text) for the viewer. */
+interface KnowledgeDetail extends KnowledgeItem {
+  text: string;
 }
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
@@ -70,7 +76,50 @@ export function KnowledgePanel({ projectId }: { projectId: string }) {
   const [pendingDelete, setPendingDelete] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
 
+  /* Viewer: the opened item's full text + an inline rename field. */
+  const [viewing, setViewing] = useState<KnowledgeDetail | null>(null);
+  const [viewLoading, setViewLoading] = useState(false);
+  const [viewErr, setViewErr] = useState<string | null>(null);
+  const [renameDraft, setRenameDraft] = useState<string | null>(null);
+  const [renaming, setRenaming] = useState(false);
+
   const base = `/projects/${encodeURIComponent(projectId)}/knowledge`;
+
+  async function openItem(id: string) {
+    setViewErr(null);
+    setRenameDraft(null);
+    setViewLoading(true);
+    try {
+      const detail = await get<KnowledgeDetail>(`${base}/${encodeURIComponent(id)}`);
+      setViewing(detail);
+    } catch (e) {
+      setViewing(null);
+      setErr(errText(e));
+    } finally {
+      setViewLoading(false);
+    }
+  }
+
+  async function saveRename() {
+    if (!viewing || renameDraft === null) return;
+    const name = renameDraft.trim();
+    if (!name || name === viewing.name) {
+      setRenameDraft(null);
+      return;
+    }
+    setRenaming(true);
+    setViewErr(null);
+    try {
+      await patch(`${base}/${encodeURIComponent(viewing.id)}`, { name });
+      setViewing({ ...viewing, name });
+      setRenameDraft(null);
+      reload();
+    } catch (e) {
+      setViewErr(errText(e));
+    } finally {
+      setRenaming(false);
+    }
+  }
 
   async function addNote() {
     if (!noteText.trim()) return;
@@ -96,23 +145,26 @@ export function KnowledgePanel({ projectId }: { projectId: string }) {
     if (!files.length) return;
     setUploadBusy(true);
     setErr(null);
-    try {
-      let added = false;
-      for (const f of files) {
-        if (f.size > MAX_FILE_BYTES) {
-          setErr(`${f.name} is too large (max 20 MB).`);
-          continue;
-        }
+    // One file failing (too large, unreadable, no extractable text) must NOT
+    // abort the rest — collect per-file errors and keep going.
+    let added = false;
+    const failures: string[] = [];
+    for (const f of files) {
+      if (f.size > MAX_FILE_BYTES) {
+        failures.push(`${f.name}: too large (max 20 MB)`);
+        continue;
+      }
+      try {
         const content_b64 = await readAsBase64(f);
         await post(base, { filename: f.name, content_b64 });
         added = true;
+      } catch (e) {
+        failures.push(`${f.name}: ${errText(e)}`);
       }
-      if (added) reload();
-    } catch (e) {
-      setErr(errText(e));
-    } finally {
-      setUploadBusy(false);
     }
+    if (added) reload();
+    setErr(failures.length ? failures.join(" · ") : null);
+    setUploadBusy(false);
   }
 
   function onPickFiles(e: React.ChangeEvent<HTMLInputElement>) {
@@ -220,6 +272,75 @@ export function KnowledgePanel({ projectId }: { projectId: string }) {
         </div>
       )}
 
+      {viewLoading && !viewing && (
+        <div className="mb-3">
+          <LoaderInline label="Opening…" />
+        </div>
+      )}
+
+      {viewing && (
+        <div className="mb-3 space-y-2 rounded-lg border hairline bg-white/[0.02] p-3">
+          <div className="flex items-start gap-2">
+            <span className="mt-0.5 shrink-0 text-zinc-500">
+              {viewing.kind === "note" ? <StickyNote size={14} /> : <FileText size={14} />}
+            </span>
+            {renameDraft !== null ? (
+              <input
+                value={renameDraft}
+                onChange={(e) => setRenameDraft(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void saveRename();
+                  if (e.key === "Escape") setRenameDraft(null);
+                }}
+                autoFocus
+                aria-label="Rename knowledge item"
+                className="field min-w-0 flex-1 text-sm"
+              />
+            ) : (
+              <div className="min-w-0 flex-1 truncate text-sm font-medium text-zinc-200">
+                {viewing.name}
+              </div>
+            )}
+            {renameDraft !== null ? (
+              <button
+                type="button"
+                onClick={() => void saveRename()}
+                disabled={renaming}
+                title="Save name"
+                className="shrink-0 rounded p-1 text-accent-soft hover:text-accent"
+              >
+                {renaming ? <LoaderInline /> : <Check size={14} />}
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setRenameDraft(viewing.name)}
+                title="Rename"
+                className="shrink-0 rounded p-1 text-zinc-500 hover:text-zinc-200"
+              >
+                <Pencil size={13} />
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                setViewing(null);
+                setRenameDraft(null);
+                setViewErr(null);
+              }}
+              title="Close"
+              className="shrink-0 rounded p-1 text-zinc-500 hover:text-zinc-200"
+            >
+              <X size={14} />
+            </button>
+          </div>
+          {viewErr && <ErrorNote>{viewErr}</ErrorNote>}
+          <div className="max-h-64 overflow-y-auto whitespace-pre-wrap rounded-md bg-black/20 p-2.5 text-xs text-zinc-300">
+            {viewing.text}
+          </div>
+        </div>
+      )}
+
       {loading && !data ? (
         <SkeletonRows rows={3} />
       ) : error && error.status === 0 ? (
@@ -240,12 +361,19 @@ export function KnowledgePanel({ projectId }: { projectId: string }) {
               <span className="shrink-0 text-zinc-500">
                 {it.kind === "note" ? <StickyNote size={14} /> : <FileText size={14} />}
               </span>
-              <div className="min-w-0 flex-1">
-                <div className="truncate text-xs text-zinc-200">{it.name}</div>
+              <button
+                type="button"
+                onClick={() => void openItem(it.id)}
+                title="View item"
+                className="min-w-0 flex-1 text-left"
+              >
+                <div className="truncate text-xs text-zinc-200 hover:text-accent-soft">
+                  {it.name}
+                </div>
                 <div className="text-[10px] text-zinc-600">
                   {kb(it.size)} KB · {timeAgo(it.created_at)}
                 </div>
-              </div>
+              </button>
               {pendingDelete === it.id ? (
                 <span className="flex shrink-0 items-center gap-1">
                   <button

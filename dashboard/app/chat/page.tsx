@@ -44,6 +44,7 @@ import {
   AudioLines,
   Bot,
   Check,
+  ChevronRight,
   Copy,
   History,
   Loader2,
@@ -184,6 +185,68 @@ const MAX_FILE_BYTES = 20 * 1024 * 1024; // 20 MB
 // so the "+" menu renders at most this many rows (search narrows the rest).
 const MAX_TOOLS = 6;
 const TOOL_LIST_CAP = 100;
+
+// Agent-mode handoff: escalating a chat conversation to a NEW agent session
+// otherwise starts the agent blind (a fresh session carries no chat history),
+// so we prepend a compact recap of the last few turns to the task.
+const HANDOFF_TURNS = 6; // last N messages carried into the recap
+const HANDOFF_CLIP = 600; // chars kept per message
+
+// "+" tool menu grouping: bucket the flat registry into a few friendly
+// categories by name/description. Heuristic — "other" catches the rest.
+type ToolCategory = "files" | "web" | "media" | "documents" | "other";
+const TOOL_CATEGORY_ORDER: ToolCategory[] = [
+  "files",
+  "web",
+  "media",
+  "documents",
+  "other",
+];
+const TOOL_CATEGORY_LABEL: Record<ToolCategory, string> = {
+  files: "Files",
+  web: "Web",
+  media: "Media",
+  documents: "Documents",
+  other: "Other",
+};
+// Checked in order — first match wins. Media/documents come before the broad
+// Files bucket so "read_pdf" / "image_convert" don't fall into it.
+const TOOL_CATEGORY_RULES: { cat: ToolCategory; rx: RegExp }[] = [
+  {
+    cat: "media",
+    rx: /(image|video|audio|media|pixio|vision|song|music|photo|picture|render|\bsfx\b|\btts\b|\bvoice\b|speech)/,
+  },
+  {
+    cat: "documents",
+    rx: /(pdf|docx|xlsx|pptx|spreadsheet|\bdocument\b|\bdoc\b|slide|presentation|\bsheet\b)/,
+  },
+  { cat: "web", rx: /(\bweb\b|http|\burl\b|fetch|browse|scrape|crawl|\bsearch\b)/ },
+  {
+    cat: "files",
+    rx: /(file|directory|folder|\bpath\b|glob|grep|\bread\b|\bwrite\b|\blist\b|\bfs\b)/,
+  },
+];
+
+function categorizeTool(t: ToolOption): ToolCategory {
+  const hay = `${t.name} ${t.description || ""}`.toLowerCase();
+  for (const { cat, rx } of TOOL_CATEGORY_RULES) {
+    if (rx.test(hay)) return cat;
+  }
+  return "other";
+}
+
+/** Compact "Conversation so far:" recap prepended to a new agent session. */
+function conversationRecap(msgs: ChatMessage[]): string {
+  if (msgs.length === 0) return "";
+  const lines = msgs.slice(-HANDOFF_TURNS).map((m) => {
+    const who = m.role === "user" ? "User" : "Assistant";
+    const text = m.content.trim();
+    const clipped =
+      text.length > HANDOFF_CLIP ? `${text.slice(0, HANDOFF_CLIP)}…` : text;
+    return `${who}: ${clipped}`;
+  });
+  return `Conversation so far:\n${lines.join("\n")}`;
+}
 
 // Persona persistence (chat mode only).
 const PERSONA_KEY = "ij_chat_persona";
@@ -575,6 +638,12 @@ export default function ChatPage() {
   const [awaitingId, setAwaitingId] = useState<string | null>(null);
   // CHAT MODE: a direct /chat call is in flight (drives the shimmer bubble).
   const [chatBusy, setChatBusy] = useState(false);
+  // CHAT MODE: the last turn that FAILED (kept intact so Retry can re-send the
+  // exact same history + attachments). Cleared the moment a turn succeeds.
+  const [failedTurn, setFailedTurn] = useState<{
+    history: ChatMessage[];
+    atts: UploadedFile[];
+  } | null>(null);
   const [models, setModels] = useState<ModelOption[]>([]);
   const [choice, setChoice] = useState(""); // "" => server default model
   const [personas, setPersonas] = useState<PersonaOption[]>(DEFAULT_PERSONAS);
@@ -589,6 +658,8 @@ export default function ChatPage() {
   const [selectedTools, setSelectedTools] = useState<string[]>([]);
   const [toolsOpen, setToolsOpen] = useState(false);
   const [toolQuery, setToolQuery] = useState("");
+  // "+" menu: category groups the user has collapsed (selection is unaffected).
+  const [collapsedCats, setCollapsedCats] = useState<Set<string>>(new Set());
   const [toolCatalog, setToolCatalog] = useState<ToolOption[] | null>(null);
   const [toolsError, setToolsError] = useState<string | null>(null);
   // "/" SKILL PICKER (chat mode): the chosen skill rides along as `skill` on
@@ -604,11 +675,17 @@ export default function ChatPage() {
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
   const [threadId, setThreadId] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState(false); // mobile-only toggle
+  const [threadQuery, setThreadQuery] = useState(""); // sidebar title filter
 
   const { events } = useEvents(150);
   // The main chat is project-agnostic — a project applies only inside the
-  // Projects module. All saved conversations show here.
-  const visibleThreads = threads;
+  // Projects module. All saved conversations show here, narrowed by the
+  // sidebar's title filter (client-side).
+  const visibleThreads = useMemo(() => {
+    const q = threadQuery.trim().toLowerCase();
+    if (!q) return threads;
+    return threads.filter((t) => (t.title || "").toLowerCase().includes(q));
+  }, [threads, threadQuery]);
 
   // ---- Voice. ONE dictation engine for both the composer mic and hands-free
   // Voice Chat (two instances would fight over the mic / recognition service).
@@ -800,6 +877,7 @@ export default function ChatPage() {
     awaitingIdRef.current = null;
     setAwaitingId(null);
     setChatBusy(false);
+    setFailedTurn(null);
     setSessionId(null);
     setAttachments([]);
     setSelectedTools([]); // armed tools are per-conversation
@@ -980,6 +1058,31 @@ export default function ChatPage() {
         (t.description || "").toLowerCase().includes(q),
     );
   }, [toolCatalog, toolQuery]);
+
+  // The capped, visible matches bucketed into ordered categories for the "+"
+  // menu's collapsible groups (empty categories are dropped).
+  const toolGroups = useMemo(() => {
+    const buckets = new Map<ToolCategory, ToolOption[]>();
+    for (const t of toolMatches.slice(0, TOOL_LIST_CAP)) {
+      const cat = categorizeTool(t);
+      const arr = buckets.get(cat);
+      if (arr) arr.push(t);
+      else buckets.set(cat, [t]);
+    }
+    return TOOL_CATEGORY_ORDER.filter((c) => buckets.has(c)).map((c) => ({
+      cat: c,
+      tools: buckets.get(c)!,
+    }));
+  }, [toolMatches]);
+
+  function toggleCat(cat: string) {
+    setCollapsedCats((prev) => {
+      const next = new Set(prev);
+      if (next.has(cat)) next.delete(cat);
+      else next.add(cat);
+      return next;
+    });
+  }
 
   // Lazily fetch + cache the skill catalog the first time "/" opens the picker.
   useEffect(() => {
@@ -1240,6 +1343,7 @@ export default function ChatPage() {
   async function completeChat(history: ChatMessage[], atts: UploadedFile[]) {
     const gen = chatGenRef.current;
     setMessages(history);
+    setFailedTurn(null); // a fresh attempt — retire any prior failure
     setChatBusy(true);
     try {
       const { provider, model } = splitChoice(choice);
@@ -1274,9 +1378,12 @@ export default function ChatPage() {
     } catch (e) {
       if (chatGenRef.current !== gen) return;
       // Keep the typed thread intact — only surface the failure (a 502 carries
-      // the provider's own message, e.g. a rate limit, in `detail`).
+      // the provider's own message, e.g. a rate limit, in `detail`). Remember
+      // the exact turn (history + attachments) so Retry can re-send it — the
+      // attachments are NOT consumed on failure.
       if (e instanceof ApiError && e.status === 0) setOffline(true);
       else setError(e instanceof ApiError ? e.message : String(e));
+      setFailedTurn({ history, atts });
     } finally {
       if (chatGenRef.current === gen) setChatBusy(false);
     }
@@ -1312,10 +1419,23 @@ export default function ChatPage() {
     void completeChat(history, []);
   }
 
+  /** Re-send the last failed chat turn — same history + attachments, verbatim. */
+  function retryTurn() {
+    if (!failedTurn || busy) return;
+    const { history, atts } = failedTurn;
+    setError(null);
+    setOffline(false);
+    void completeChat(history, atts);
+  }
+
   /** AGENT MODE: the original session flow (wait:false + live steps + finalize). */
   async function sendAgent(message: string) {
     const atts = attachments;
     setAttachments([]); // chips are consumed by this message
+    // A recap of the chat so far — prepended ONLY when opening a fresh session
+    // below (switching to Agent mode drops all context otherwise). Captured
+    // before the new user bubble is appended.
+    const recap = conversationRecap(messages);
     // Match the kanban precedent: point the agent at the uploaded files in-text.
     const attachLines = atts.map((a) => `\n\nAttached file: ${a.path}`).join("");
     const task = message + attachLines;
@@ -1338,10 +1458,12 @@ export default function ChatPage() {
           wait: false,
         });
       } else {
-        // First message opens a session.
+        // First message opens a session — carry the chat recap into the task so
+        // the agent inherits the conversation instead of starting cold.
         const { provider, model } = splitChoice(choice);
+        const openingTask = recap ? `${recap}\n\n---\n\n${task}` : task;
         session = await post<SessionView>("/sessions", {
-          task,
+          task: openingTask,
           agent_type: "builder",
           wait: false,
           ...(provider ? { provider } : {}),
@@ -1395,6 +1517,7 @@ export default function ChatPage() {
     awaitingIdRef.current = null;
     setAwaitingId(null); // also tears down any polling interval
     setChatBusy(false);
+    setFailedTurn(null);
     setAttachments([]);
     setSelectedTools([]);
     setToolsOpen(false);
@@ -1658,6 +1781,21 @@ export default function ChatPage() {
                     <Plus size={13} /> New chat
                   </button>
                 </div>
+                {threads.length > 0 && (
+                  <div className="relative mt-2">
+                    <Search
+                      size={12}
+                      className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 text-zinc-500"
+                    />
+                    <input
+                      value={threadQuery}
+                      onChange={(e) => setThreadQuery(e.target.value)}
+                      placeholder="Search chats…"
+                      aria-label="Search chats"
+                      className="field w-full py-1.5 pl-8 text-[12px]"
+                    />
+                  </div>
+                )}
               </div>
               <div className="max-h-[70vh] overflow-y-auto p-1.5">
                 {threads.length === 0 ? (
@@ -1667,8 +1805,7 @@ export default function ChatPage() {
                   </p>
                 ) : visibleThreads.length === 0 ? (
                   <p className="px-2.5 py-3 text-xs leading-relaxed text-zinc-500">
-                    No chats in this project yet — new conversations are tagged
-                    into it automatically.
+                    No chats match “{threadQuery.trim()}”.
                   </p>
                 ) : (
                   <div className="space-y-0.5">
@@ -1837,9 +1974,23 @@ export default function ChatPage() {
                 <div ref={bottomRef} />
               </div>
 
-              {error && (
-                <div className="border-t hairline p-3">
-                  <ErrorNote>{error}</ErrorNote>
+              {(error || (failedTurn && !busy)) && (
+                <div className="flex flex-wrap items-center gap-2 border-t hairline p-3">
+                  {error && (
+                    <div className="min-w-0 flex-1">
+                      <ErrorNote>{error}</ErrorNote>
+                    </div>
+                  )}
+                  {failedTurn && !busy && (
+                    <button
+                      type="button"
+                      onClick={retryTurn}
+                      title="Re-send the last message"
+                      className="btn-ghost shrink-0 py-1.5 text-[13px]"
+                    >
+                      <RefreshCw size={14} /> Retry
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -2071,8 +2222,16 @@ export default function ChatPage() {
                               className="field w-full py-1.5 pl-8 text-[12px]"
                             />
                           </div>
-                          <p className="mt-1.5 px-0.5 text-[10px] text-zinc-500">
-                            up to {MAX_TOOLS} tools · {selectedTools.length} armed
+                          <p
+                            className={`mt-1.5 px-0.5 text-[10px] ${
+                              selectedTools.length >= MAX_TOOLS
+                                ? "text-accent-soft"
+                                : "text-zinc-500"
+                            }`}
+                          >
+                            {selectedTools.length >= MAX_TOOLS
+                              ? `Maximum ${MAX_TOOLS} tools armed — disarm one to add another`
+                              : `Arm up to ${MAX_TOOLS} tools · ${selectedTools.length} armed`}
                           </p>
                         </div>
                         <div className="min-h-0 flex-1 overflow-y-auto p-1">
@@ -2090,47 +2249,79 @@ export default function ChatPage() {
                             </p>
                           ) : (
                             <>
-                              {toolMatches.slice(0, TOOL_LIST_CAP).map((t) => {
-                                const checked = selectedTools.includes(t.name);
-                                const atCap =
-                                  !checked && selectedTools.length >= MAX_TOOLS;
+                              {toolGroups.map(({ cat, tools }) => {
+                                const collapsed = collapsedCats.has(cat);
+                                const armedInCat = tools.filter((t) =>
+                                  selectedTools.includes(t.name),
+                                ).length;
                                 return (
-                                  <button
-                                    key={t.name}
-                                    type="button"
-                                    role="checkbox"
-                                    aria-checked={checked}
-                                    disabled={atCap}
-                                    onClick={() => toggleTool(t.name)}
-                                    title={t.description}
-                                    className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
-                                      atCap
-                                        ? "opacity-40"
-                                        : "hover:bg-white/[0.05]"
-                                    }`}
-                                  >
-                                    <span
-                                      className={`grid h-3.5 w-3.5 shrink-0 place-items-center rounded border ${
-                                        checked
-                                          ? "border-accent/60 bg-accent/20 text-accent-soft"
-                                          : "border-white/20"
-                                      }`}
+                                  <div key={cat} className="mb-0.5">
+                                    <button
+                                      type="button"
+                                      onClick={() => toggleCat(cat)}
+                                      aria-expanded={!collapsed}
+                                      className="flex w-full items-center gap-1.5 rounded-md px-2 py-1 text-[10px] font-semibold uppercase tracking-wide text-zinc-500 transition-colors hover:text-zinc-300"
                                     >
-                                      {checked && <Check size={10} />}
-                                    </span>
-                                    <span
-                                      className={`max-w-[45%] shrink-0 truncate font-mono text-[12px] ${
-                                        checked
-                                          ? "text-accent-soft"
-                                          : "text-zinc-200"
-                                      }`}
-                                    >
-                                      {t.name}
-                                    </span>
-                                    <span className="truncate text-[11px] text-zinc-500">
-                                      {t.description}
-                                    </span>
-                                  </button>
+                                      <ChevronRight
+                                        size={11}
+                                        className={`shrink-0 transition-transform ${
+                                          collapsed ? "" : "rotate-90"
+                                        }`}
+                                      />
+                                      {TOOL_CATEGORY_LABEL[cat]}
+                                      <span className="font-normal normal-case tracking-normal text-zinc-600">
+                                        {tools.length}
+                                        {armedInCat ? ` · ${armedInCat} armed` : ""}
+                                      </span>
+                                    </button>
+                                    {!collapsed &&
+                                      tools.map((t) => {
+                                        const checked = selectedTools.includes(
+                                          t.name,
+                                        );
+                                        const atCap =
+                                          !checked &&
+                                          selectedTools.length >= MAX_TOOLS;
+                                        return (
+                                          <button
+                                            key={t.name}
+                                            type="button"
+                                            role="checkbox"
+                                            aria-checked={checked}
+                                            disabled={atCap}
+                                            onClick={() => toggleTool(t.name)}
+                                            title={t.description}
+                                            className={`flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition-colors ${
+                                              atCap
+                                                ? "opacity-40"
+                                                : "hover:bg-white/[0.05]"
+                                            }`}
+                                          >
+                                            <span
+                                              className={`grid h-3.5 w-3.5 shrink-0 place-items-center rounded border ${
+                                                checked
+                                                  ? "border-accent/60 bg-accent/20 text-accent-soft"
+                                                  : "border-white/20"
+                                              }`}
+                                            >
+                                              {checked && <Check size={10} />}
+                                            </span>
+                                            <span
+                                              className={`max-w-[45%] shrink-0 truncate font-mono text-[12px] ${
+                                                checked
+                                                  ? "text-accent-soft"
+                                                  : "text-zinc-200"
+                                              }`}
+                                            >
+                                              {t.name}
+                                            </span>
+                                            <span className="truncate text-[11px] text-zinc-500">
+                                              {t.description}
+                                            </span>
+                                          </button>
+                                        );
+                                      })}
+                                  </div>
                                 );
                               })}
                               {toolMatches.length > TOOL_LIST_CAP && (

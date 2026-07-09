@@ -14,14 +14,20 @@ from typing import Any
 from ..app import _session_view
 from ..schemas import (
     AgentCreate,
+    AgentPatch,
     CustomToolCreate,
     McpServerBody,
     McpSuggestBody,
+    RemoteAgentCreate,
+    RemoteAgentRun,
     SkillApplyBody,
     SkillCreate,
     SpawnBody,
     ToolGenerateBody,
 )
+
+# Importing this registers the RemoteAgentRecord table on the shared metadata.
+from ...agents.remote import RemoteAgentRegistry
 
 
 def register(app: FastAPI, d) -> None:
@@ -122,6 +128,8 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/agents")
     def list_agents() -> dict[str, Any]:
+        import json as _json
+
         from ...agents.types import _DEFINITIONS
 
         return {
@@ -132,6 +140,10 @@ def register(app: FastAPI, d) -> None:
                     "description": r.description,
                     "provider": r.provider,
                     "model": r.model,
+                    # Editable fields so the Agents page can PATCH them without a
+                    # separate detail fetch.
+                    "system_prompt": r.system_prompt,
+                    "tools": _json.loads(r.tools_json or "[]"),
                 }
                 for r in d.platform.agents_registry.list()
             ],
@@ -139,8 +151,11 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/agents")
     def create_agent(body: AgentCreate) -> dict[str, Any]:
+        name = (body.name or "").strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="name is required")
         rec = d.platform.agents_registry.register(
-            body.name,
+            name,
             body.system_prompt,
             body.tools,
             description=body.description,
@@ -148,6 +163,127 @@ def register(app: FastAPI, d) -> None:
             model=body.model,
         )
         return {"name": rec.name, "provider": rec.provider, "model": rec.model}
+
+    # --- Remote agents (run elsewhere) ------------------------------------
+    # Registered BEFORE the /agents/{name} routes below so the literal
+    # /agents/remote path is never swallowed by the {name} param match.
+
+    def _remote_reg() -> RemoteAgentRegistry:
+        return RemoteAgentRegistry(d.platform.engine)
+
+    def _remote_view(r) -> dict[str, Any]:
+        # STATUS only — never the token / secret value.
+        return {
+            "name": r.name,
+            "base_url": r.base_url,
+            "kind": r.kind,
+            "model": r.model or "",
+            "enabled": r.enabled,
+            "timeout_s": r.timeout_s,
+            "has_credential": bool(r.secret_name),
+            "created_at": r.created_at.isoformat() if r.created_at else None,
+        }
+
+    @app.get("/agents/remote")
+    def list_remote_agents() -> dict[str, Any]:
+        return {"agents": [_remote_view(r) for r in _remote_reg().list()]}
+
+    @app.post("/agents/remote")
+    def add_remote_agent(body: RemoteAgentCreate) -> dict[str, Any]:
+        import re as _re
+
+        from ...agents.remote import KINDS
+
+        name = (body.name or "").strip()
+        if not _re.match(r"^[a-zA-Z][a-zA-Z0-9_-]{0,63}$", name):
+            raise HTTPException(status_code=400, detail="invalid remote agent name")
+        if not (body.base_url or "").strip():
+            raise HTTPException(status_code=400, detail="base_url is required")
+        if body.kind not in KINDS:
+            raise HTTPException(
+                status_code=400, detail=f"kind must be one of {', '.join(KINDS)}"
+            )
+        secret_name: str | None = None
+        if (body.token or "").strip():
+            secret_name = "remote_agent_" + name
+            d.platform.secrets.set(secret_name, body.token.strip(), kind="token")
+        rec = _remote_reg().upsert(
+            name,
+            body.base_url.strip(),
+            body.kind,
+            secret_name=secret_name,
+            model=(body.model or "").strip() or None,
+            enabled=body.enabled,
+            timeout_s=int(body.timeout_s or 120),
+        )
+        return _remote_view(rec)
+
+    @app.delete("/agents/remote/{name}")
+    def delete_remote_agent(name: str) -> dict[str, Any]:
+        reg = _remote_reg()
+        rec = reg.get(name)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such remote agent")
+        # Drop its vault secret too (best-effort — an absent secret is fine).
+        if rec.secret_name:
+            try:
+                d.platform.secrets.delete(rec.secret_name)
+            except Exception:  # noqa: BLE001
+                pass
+        reg.remove(name)
+        return {"removed": name}
+
+    @app.post("/agents/remote/{name}/test")
+    async def test_remote_agent(name: str) -> dict[str, Any]:
+        reg = _remote_reg()
+        rec = reg.get(name)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such remote agent")
+        return await reg.test(rec, d.platform.secrets.get)
+
+    @app.post("/agents/remote/{name}/run")
+    async def run_remote_agent(name: str, body: RemoteAgentRun) -> dict[str, Any]:
+        reg = _remote_reg()
+        rec = reg.get(name)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="no such remote agent")
+        if not rec.enabled:
+            raise HTTPException(status_code=400, detail="remote agent is disabled")
+        res = await reg.run(rec, body.task or "", d.platform.secrets.get)
+        if not res.get("ok"):
+            # 424 Failed Dependency — the remote agent itself failed to answer.
+            raise HTTPException(status_code=424, detail=res.get("detail") or "remote call failed")
+        return {"result": res.get("result") or "", "agent": name, "kind": rec.kind}
+
+    # --- Dynamic-agent edit / delete (catch-all {name} — keep AFTER remote) ---
+
+    @app.patch("/agents/{name}")
+    def patch_agent(name: str, body: AgentPatch) -> dict[str, Any]:
+        rec = d.platform.agents_registry.get(name)
+        if rec is None:
+            raise HTTPException(status_code=404, detail="unknown agent")
+        import json as _json
+
+        try:
+            tools = _json.loads(rec.tools_json or "[]")
+        except (TypeError, ValueError):
+            tools = []
+        updated = d.platform.agents_registry.register(
+            name,
+            body.system_prompt if body.system_prompt is not None else rec.system_prompt,
+            [str(t) for t in body.tools] if body.tools is not None else tools,
+            base_type=rec.base_type,
+            description=body.description if body.description is not None else rec.description,
+            provider=rec.provider,
+            model=rec.model,
+        )
+        return {"name": updated.name, "description": updated.description}
+
+    @app.delete("/agents/{name}")
+    def delete_agent(name: str) -> dict[str, Any]:
+        if not d.platform.agents_registry.remove(name):
+            raise HTTPException(status_code=404, detail="unknown agent")
+        return {"removed": name}
 
     # Custom (agent/user-authored) reusable tools.
     @app.get("/tools/custom")

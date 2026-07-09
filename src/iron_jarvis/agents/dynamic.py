@@ -152,6 +152,20 @@ class DynamicAgentRegistry:
     def list(self) -> list[DynamicAgentRecord]:
         return sorted(self._records.values(), key=lambda r: r.name)
 
+    def remove(self, name: str) -> bool:
+        """Delete a dynamic agent by name; True if a row was removed."""
+        with session_scope(self.engine) as db:
+            row = db.exec(
+                select(DynamicAgentRecord).where(DynamicAgentRecord.name == name)
+            ).first()
+            if row is None:
+                self._records.pop(name, None)
+                return False
+            db.delete(row)
+            db.commit()
+        self._records.pop(name, None)
+        return True
+
     def definition(self, name: str) -> AgentDefinition | None:
         """Rebuild a stored agent into an ``AgentDefinition`` (None if unknown)."""
         record = self.get(name)

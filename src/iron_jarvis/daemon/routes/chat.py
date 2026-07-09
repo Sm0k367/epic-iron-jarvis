@@ -259,7 +259,9 @@ def register(app: FastAPI, d) -> None:
         # user's explicit consent for this conversation.
         armed = [t for t in (body.tools or [])[:6] if d.platform.registry.get(t)]
         tool_specs = d.platform.registry.specs(armed) if armed else []
-        tools_used: list[str] = []
+        tools_used: list[str] = []          # ONLY tools that actually executed
+        last_tool_output = ""               # last SUCCESSFUL output (no-reply synthesis)
+        denied_tools: list[str] = []        # armed tools the engine refused this turn
         if armed:
             from ...tools.base import ToolContext
 
@@ -294,7 +296,17 @@ def register(app: FastAPI, d) -> None:
                     else ""
                 )
             )
-        overrides = {t: "allow" for t in armed}
+        # Auto-allow keyed by BOTH the tool NAME and its perm_key(): the
+        # permission engine authorizes on perm_key(), so for GROUPED tools
+        # (pixio_*, view_image / image_*, mcp_*) whose perm_key differs from the
+        # name a name-only override never matches — arming them would silently
+        # DENY. Keying both hits either lookup.
+        overrides: dict[str, str] = {}
+        for _name in armed:
+            overrides[_name] = "allow"
+            _tool = d.platform.registry.get(_name)
+            if _tool is not None:
+                overrides[_tool.perm_key()] = "allow"
         # Routing: an explicit body choice always wins; otherwise fall back to
         # the resolved project's per-project default model, if it has one.
         provider_choice = (body.provider or "").strip() or (
@@ -320,14 +332,28 @@ def register(app: FastAPI, d) -> None:
                                        content=route.response.text,
                                        tool_calls=calls))
                 for tc in calls:
-                    tools_used.append(tc.name)
+                    ran = False
                     try:
                         result = await d.platform.registry.invoke(
                             tc.name, tc.arguments, ctx, d.platform.permissions, overrides
                         )
-                        content = result.output if result.ok else (result.error or "error")
+                        if result.ok:
+                            content = result.output
+                            ran = True
+                            last_tool_output = str(result.output or "")
+                        else:
+                            content = result.error or "error"
+                            # An honest permission refusal is not "used" — record it
+                            # so the reply can note it (a tool-internal failure just
+                            # rides back to the model as its tool-message content).
+                            if "permission denied" in (result.error or ""):
+                                denied_tools.append(tc.name)
                     except Exception as exc:  # noqa: BLE001
                         content = f"{type(exc).__name__}: {exc}"
+                    # tools_used counts ONLY tools that actually executed — a denied
+                    # or failed call is not honestly reported as run.
+                    if ran:
+                        tools_used.append(tc.name)
                     msgs.append(LLMMessage(role="tool", tool_call_id=tc.id,
                                            name=tc.name, content=str(content)[:12000]))
         except Exception as exc:  # noqa: BLE001 — honest, human error
@@ -355,8 +381,22 @@ def register(app: FastAPI, d) -> None:
                 db.commit()
         except Exception:  # noqa: BLE001 — accounting must never break a reply
             pass
+        # Reply honesty: if the model returned no final text but tools DID run
+        # with output, synthesize a short summary from the last result rather
+        # than the bare "(no reply)" placeholder (which reads like the turn did
+        # nothing). Denied armed tools get an honest footer note.
+        reply = route.response.text or ""
+        if not reply.strip() and last_tool_output:
+            snippet = last_tool_output.strip()[:600]
+            ran = ", ".join(dict.fromkeys(tools_used)) or "the armed tools"
+            reply = f"Ran {ran}. Result:\n{snippet}"
+        elif not reply.strip():
+            reply = "(no reply)"
+        if denied_tools:
+            names = ", ".join(dict.fromkeys(denied_tools))
+            reply += f"\n\n_Note: {names} could not run (permission denied)._"
         return {
-            "reply": route.response.text or "(no reply)",
+            "reply": reply,
             "provider": route.provider,
             "model": route.model,
             "attached": len(body.attachments or []),

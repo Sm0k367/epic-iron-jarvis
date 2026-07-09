@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -23,6 +23,14 @@ import {
   LayoutGrid,
   Play,
   BookMarked,
+  MessageSquare,
+  SquareTerminal,
+  FolderKanban,
+  Images,
+  Cpu,
+  HardDrive,
+  Zap,
+  AlertTriangle,
 } from "lucide-react";
 import { usePolledApi, useApi } from "@/lib/useApi";
 import { useEvents } from "@/lib/useEvents";
@@ -48,6 +56,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { EventStream } from "@/components/EventStream";
 import { ProviderDowngradeBanner } from "@/components/ProviderDowngradeBanner";
 import { OnboardingWelcome } from "@/components/OnboardingWelcome";
+import { MoodOrb } from "@/components/MoodOrb";
 import { PageShell, Reveal } from "@/components/motion";
 import { pct, num, timeAgo, clockTime, shortId } from "@/lib/format";
 
@@ -61,6 +70,12 @@ type Diagnostics = {
   pending_reviews?: number;
   tracked_worktrees?: number;
   background_loops?: Record<string, { ok?: boolean; error?: string }>;
+};
+
+/** GET /diagnostics/reliability — free disk + recent provider failures (24h). */
+type Reliability = {
+  disk?: { free?: number; total?: number };
+  recent_provider_failures?: number;
 };
 
 /** A saved reusable task from GET /templates (mirrors the Templates page). */
@@ -108,8 +123,25 @@ const FIRST_WIN_TASKS: {
   },
 ];
 
+/** Interactive shortcuts into the four hero surfaces + Creative. Real hrefs. */
+const QUICK_ACTIONS: {
+  href: string;
+  title: string;
+  desc: string;
+  icon: ReactNode;
+}[] = [
+  { href: "/chat", title: "New chat", desc: "Talk to Iron Jarvis", icon: <MessageSquare size={18} /> },
+  { href: "/sessions", title: "New session", desc: "Run an agent task", icon: <Boxes size={18} /> },
+  { href: "/projects", title: "Open a project", desc: "Your context spine", icon: <FolderKanban size={18} /> },
+  { href: "/creative", title: "Creative", desc: "Images, video, audio", icon: <Images size={18} /> },
+  { href: "/terminals", title: "Build", desc: "Terminals & AI CLIs", icon: <SquareTerminal size={18} /> },
+];
+
 /** Event types that describe an agent starting or finishing a run. */
 const LIVE_EVENT_TYPES = new Set(["agent.started", "agent.completed"]);
+
+/** The truthful state of a live-activity row. */
+type LiveState = "running" | "completed" | "failed";
 
 /** Short, human-ish label for a live activity row. */
 function eventLabel(e: IJEvent): string {
@@ -134,6 +166,35 @@ function fmtBytes(b?: number): string {
     i += 1;
   }
   return `${n.toFixed(i > 0 && n < 10 ? 1 : 0)} ${u[i]}`;
+}
+
+/** A compact stat tile for the hero status band. */
+function HeroStat({
+  label,
+  value,
+  icon,
+  tone = "neutral",
+  title,
+}: {
+  label: string;
+  value: ReactNode;
+  icon: ReactNode;
+  tone?: "neutral" | "accent" | "bad";
+  title?: string;
+}) {
+  const tint =
+    tone === "bad" ? "text-rose-300" : tone === "accent" ? "text-accent-soft" : "text-zinc-100";
+  return (
+    <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5">
+      <div className="flex items-center gap-1.5 text-[10px] font-medium uppercase tracking-[0.12em] text-zinc-500">
+        <span className="text-accent-soft/70">{icon}</span>
+        {label}
+      </div>
+      <div className={`mt-1 truncate text-sm font-semibold ${tint}`} title={title}>
+        {value}
+      </div>
+    </div>
+  );
 }
 
 function HealthItem({
@@ -173,10 +234,23 @@ export default function OverviewPage() {
   const sessions = usePolledApi<{ sessions: SessionView[] }>("/sessions", 5000);
   // /diagnostics runs a full DB integrity scan — poll slowly.
   const diag = usePolledApi<Diagnostics>("/diagnostics", 30000);
+  // Reliability signal (free disk + recent provider failures) — read-only.
+  const reliability = usePolledApi<Reliability>("/diagnostics/reliability", 30000);
 
   const router = useRouter();
   const templates = useApi<{ templates: Template[] }>("/templates");
   const { events, connected } = useEvents(40);
+
+  // Respect the Sidebar's Simple/Advanced mode (seeded Simple for stable SSR,
+  // hydrated from localStorage). Advanced reveals the deeper telemetry sections.
+  const [advanced, setAdvanced] = useState(false);
+  useEffect(() => {
+    try {
+      setAdvanced(localStorage.getItem("ij_nav_advanced") === "1");
+    } catch {
+      /* localStorage unavailable — stay in Simple mode. */
+    }
+  }, []);
 
   const offline = health.error && health.error.status === 0;
   const m = metrics.data;
@@ -187,7 +261,13 @@ export default function OverviewPage() {
 
   // One click → a real result: start the agent in the background (wait:false) and
   // jump to its detail page so the user watches it run live.
-  async function startTask(task: string, key: string, agentType = "builder") {
+  async function startTask(
+    task: string,
+    key: string,
+    agentType = "builder",
+    provider?: string | null,
+    model?: string | null,
+  ) {
     if (starting) return;
     setStarting(key);
     setStartError(null);
@@ -196,6 +276,9 @@ export default function OverviewPage() {
         task,
         agent_type: agentType,
         wait: false,
+        // Carry a template's pinned provider/model into the run (else dropped).
+        ...(provider ? { provider } : {}),
+        ...(model ? { model } : {}),
       });
       if (s?.id) {
         router.push(`/sessions/${s.id}`);
@@ -224,13 +307,64 @@ export default function OverviewPage() {
       .slice(0, 6);
   }, [sessions.data]);
 
-  // Latest agent start/finish lines from the live stream.
-  const liveEvents = useMemo(
-    () => events.filter((e) => LIVE_EVENT_TYPES.has(e.type)).slice(0, 3),
-    [events],
-  );
+  // Live agent start/finish rows — TRUTHFUL: one row per run, newest event wins.
+  // Because events arrive newest-first, the first event seen for a run is its
+  // latest state, so a run that already completed never also shows as "Running".
+  const liveEvents = useMemo(() => {
+    const seen = new Set<string>();
+    const rows: {
+      id: string;
+      session_id: string | null;
+      label: string;
+      state: LiveState;
+      ts: string;
+    }[] = [];
+    for (const e of events) {
+      if (!LIVE_EVENT_TYPES.has(e.type)) continue;
+      const key = String(e.payload?.run_id ?? e.session_id ?? e.id);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const done = e.type === "agent.completed";
+      const failed = done && e.payload?.ok === false;
+      rows.push({
+        id: e.id,
+        session_id: e.session_id,
+        label: eventLabel(e),
+        state: failed ? "failed" : done ? "completed" : "running",
+        ts: e.ts,
+      });
+      if (rows.length >= 3) break;
+    }
+    return rows;
+  }, [events]);
 
   const templateList = templates.data?.templates ?? [];
+
+  // Hero status band signals.
+  const runningCount = useMemo(
+    () =>
+      (sessions.data?.sessions ?? []).filter((s) => {
+        const st = s.status.toLowerCase();
+        return st === "running" || st === "active" || st === "pending";
+      }).length,
+    [sessions.data],
+  );
+  const failures = reliability.data?.recent_provider_failures ?? 0;
+  const freeDisk = reliability.data?.disk?.free;
+  const statusLine = offline
+    ? "Daemon offline"
+    : runningCount > 0
+      ? `Working on ${runningCount} task${runningCount === 1 ? "" : "s"}`
+      : failures > 0
+        ? `${failures} provider hiccup${failures === 1 ? "" : "s"} in the last 24h`
+        : "All systems nominal";
+
+  // Compact connections summary.
+  const realProviders = (health.data?.providers ?? []).filter(
+    (p) => p.provider !== "mock" && p.class !== "mock",
+  );
+  const readyCount = realProviders.filter((p) => p.available).length;
+  const vaultLoggedIn = (vault.data?.providers ?? []).filter((p) => p.logged_in).length;
 
   return (
     <PageShell>
@@ -263,6 +397,120 @@ export default function OverviewPage() {
       {/* First-run welcome + getting-started checklist */}
       <Reveal>
         <OnboardingWelcome />
+      </Reveal>
+
+      {/* HERO STATUS BAND — arc-reactor MoodOrb + status line + stat tiles. */}
+      <Reveal>
+        <div className="card-surface relative overflow-hidden">
+          <div className="pointer-events-none absolute -left-16 -top-24 h-64 w-64 rounded-full bg-accent/10 blur-3xl" />
+          <div className="pointer-events-none absolute -right-10 top-1/2 h-40 w-40 -translate-y-1/2 rounded-full bg-accent/[0.06] blur-3xl" />
+          <div className="relative grid gap-6 p-6 lg:grid-cols-[minmax(0,auto)_1fr] lg:items-center">
+            {/* Orb + one-line mood/status */}
+            <div className="flex items-center gap-5">
+              <span className="relative grid h-20 w-20 shrink-0 place-items-center rounded-full border border-accent/15 bg-accent/[0.04] shadow-[0_0_28px_-6px_rgba(34,211,238,0.35)]">
+                <span className="scale-[2.05]">
+                  <MoodOrb />
+                </span>
+              </span>
+              <div className="min-w-0">
+                <div className="text-[11px] font-medium uppercase tracking-[0.16em] text-zinc-500">
+                  Iron Jarvis
+                </div>
+                <div className="mt-1 truncate text-lg font-semibold text-zinc-100">
+                  {statusLine}
+                </div>
+                <div className="mt-1.5 flex items-center gap-2 text-xs text-zinc-500">
+                  <Dot on={connected} />
+                  <span>{connected ? "live" : "stream offline"}</span>
+                  {health.data && (
+                    <>
+                      <span>·</span>
+                      <span>v{health.data.version}</span>
+                    </>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Stat tiles */}
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+              <HeroStat
+                label="Model"
+                icon={<Cpu size={12} />}
+                tone="accent"
+                value={
+                  health.data ? (
+                    <span className="font-mono">
+                      {health.data.default_provider}/{health.data.default_model}
+                    </span>
+                  ) : health.loading ? (
+                    <Skeleton className="h-4 w-24" />
+                  ) : (
+                    "—"
+                  )
+                }
+                title={
+                  health.data
+                    ? `${health.data.default_provider} / ${health.data.default_model}`
+                    : undefined
+                }
+              />
+              <HeroStat
+                label="Running"
+                icon={<Zap size={12} />}
+                tone={runningCount > 0 ? "accent" : "neutral"}
+                value={String(runningCount)}
+              />
+              <HeroStat
+                label="Free disk"
+                icon={<HardDrive size={12} />}
+                value={
+                  freeDisk != null ? (
+                    fmtBytes(freeDisk)
+                  ) : reliability.loading ? (
+                    <Skeleton className="h-4 w-16" />
+                  ) : (
+                    "—"
+                  )
+                }
+              />
+              <HeroStat
+                label="Failures 24h"
+                icon={<AlertTriangle size={12} />}
+                tone={failures > 0 ? "bad" : "neutral"}
+                value={String(failures)}
+              />
+            </div>
+          </div>
+        </div>
+      </Reveal>
+
+      {/* INTERACTIVE quick actions into the hero surfaces. */}
+      <Reveal>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          {QUICK_ACTIONS.map((a) => (
+            <Link
+              key={a.href}
+              href={a.href}
+              className="group relative flex items-center gap-3 overflow-hidden rounded-2xl border border-white/[0.06] bg-white/[0.02] p-4 transition-all duration-300 hover:-translate-y-0.5 hover:border-accent/30 hover:bg-accent/[0.04] hover:shadow-card-hover"
+            >
+              <span className="pointer-events-none absolute -right-6 -top-8 h-20 w-20 rounded-full bg-accent/10 opacity-0 blur-2xl transition-opacity duration-300 group-hover:opacity-100" />
+              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border border-accent/20 bg-accent/[0.08] text-accent-soft">
+                {a.icon}
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-sm font-semibold text-zinc-100">
+                  {a.title}
+                </span>
+                <span className="block truncate text-xs text-zinc-500">{a.desc}</span>
+              </span>
+              <ArrowRight
+                size={14}
+                className="ml-auto shrink-0 text-zinc-600 transition-all group-hover:translate-x-0.5 group-hover:text-accent-soft"
+              />
+            </Link>
+          ))}
+        </div>
       </Reveal>
 
       {/* First-win: one click → a real result. */}
@@ -333,14 +581,21 @@ export default function OverviewPage() {
           {liveEvents.length > 0 && (
             <div className="mb-3 space-y-1.5">
               {liveEvents.map((e) => {
-                const running = e.type === "agent.started";
+                const failed = e.state === "failed";
+                const running = e.state === "running";
+                const label = running ? "Running now" : failed ? "Failed" : "Just finished";
+                const tone = failed
+                  ? "border-rose-500/25 bg-rose-500/[0.06] hover:bg-rose-500/[0.1]"
+                  : "border-accent/20 bg-accent/[0.05] hover:bg-accent/[0.09]";
                 const row = (
                   <span className="flex items-center gap-2.5">
-                    <StatusDot status={running ? "running" : "completed"} />
-                    <span className="shrink-0 font-medium text-zinc-200">
-                      {running ? "Running now" : "Just finished"}
+                    <StatusDot status={e.state} />
+                    <span
+                      className={`shrink-0 font-medium ${failed ? "text-rose-200" : "text-zinc-200"}`}
+                    >
+                      {label}
                     </span>
-                    <span className="truncate text-zinc-500">{eventLabel(e)}</span>
+                    <span className="truncate text-zinc-500">{e.label}</span>
                     <span className="ml-auto shrink-0 tabular-nums text-[11px] text-zinc-600">
                       {clockTime(e.ts)}
                     </span>
@@ -350,14 +605,14 @@ export default function OverviewPage() {
                   <Link
                     key={e.id}
                     href={`/sessions/${e.session_id}`}
-                    className="block rounded-xl border border-accent/20 bg-accent/[0.05] px-3 py-2 text-xs transition-colors hover:bg-accent/[0.09]"
+                    className={`block rounded-xl border px-3 py-2 text-xs transition-colors ${tone}`}
                   >
                     {row}
                   </Link>
                 ) : (
                   <div
                     key={e.id}
-                    className="rounded-xl border border-accent/20 bg-accent/[0.05] px-3 py-2 text-xs"
+                    className={`rounded-xl border px-3 py-2 text-xs ${tone}`}
                   >
                     {row}
                   </div>
@@ -429,7 +684,9 @@ export default function OverviewPage() {
                     key={t.id}
                     type="button"
                     disabled={!!starting}
-                    onClick={() => startTask(t.task, key, t.agent_type || "builder")}
+                    onClick={() =>
+                      startTask(t.task, key, t.agent_type || "builder", t.provider, t.model)
+                    }
                     title={t.task}
                     className="group flex items-center gap-3 rounded-xl border border-white/[0.06] bg-white/[0.02] p-3 text-left transition-all duration-300 hover:-translate-y-0.5 hover:border-violet-500/30 hover:bg-violet-500/[0.04] disabled:pointer-events-none disabled:opacity-60"
                   >
@@ -452,66 +709,85 @@ export default function OverviewPage() {
         </Reveal>
       )}
 
-      {/* Metric cards */}
-      <Reveal>
-        <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-          <Stat
-            label="Sessions evaluated"
-            icon={<Activity size={16} />}
-            accent
-            value={m ? m.sessions_evaluated : metrics.loading ? <Skeleton className="h-8 w-12" /> : "—"}
-          />
-          <Stat
-            label="Avg completion"
-            icon={<Gauge size={16} />}
-            value={m ? pct(m.avg_completion) : metrics.loading ? <Skeleton className="h-8 w-16" /> : "—"}
-          />
-          <Stat
-            label="Tool success"
-            icon={<Wrench size={16} />}
-            value={m ? pct(m.avg_tool_success_rate) : metrics.loading ? <Skeleton className="h-8 w-16" /> : "—"}
-          />
-          <Stat
-            label="Avg latency"
-            icon={<Timer size={16} />}
-            value={m ? `${num(m.avg_latency_s)}s` : metrics.loading ? <Skeleton className="h-8 w-16" /> : "—"}
-            sub={m ? `${m.total_tool_invocations} tool calls · ${m.event_count} events` : undefined}
-          />
-        </div>
-      </Reveal>
+      {/* Metric cards (Advanced) */}
+      {advanced && (
+        <Reveal>
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            <Stat
+              label="Sessions evaluated"
+              icon={<Activity size={16} />}
+              accent
+              value={m ? m.sessions_evaluated : metrics.loading ? <Skeleton className="h-8 w-12" /> : "—"}
+            />
+            <Stat
+              label="Avg completion"
+              icon={<Gauge size={16} />}
+              value={m ? pct(m.avg_completion) : metrics.loading ? <Skeleton className="h-8 w-16" /> : "—"}
+            />
+            <Stat
+              label="Tool success"
+              icon={<Wrench size={16} />}
+              value={m ? pct(m.avg_tool_success_rate) : metrics.loading ? <Skeleton className="h-8 w-16" /> : "—"}
+            />
+            <Stat
+              label="Avg latency"
+              icon={<Timer size={16} />}
+              value={m ? `${num(m.avg_latency_s)}s` : metrics.loading ? <Skeleton className="h-8 w-16" /> : "—"}
+              sub={m ? `${m.total_tool_invocations} tool calls · ${m.event_count} events` : undefined}
+            />
+          </div>
+        </Reveal>
+      )}
 
       <Reveal>
-        <div className="grid gap-4 lg:grid-cols-3">
-          {/* Providers */}
-          <Card title="Providers" icon={<Server size={15} />}>
+        <div className="grid gap-4 lg:grid-cols-2">
+          {/* Connections — compact summary + manage link (trimmed from two cards). */}
+          <Card
+            title="Connections"
+            icon={<Server size={15} />}
+            right={
+              <Link
+                href="/connections"
+                className="flex items-center gap-1 text-xs text-accent-soft transition-colors hover:text-accent"
+              >
+                manage <ArrowRight size={12} />
+              </Link>
+            }
+          >
             {health.loading && !health.data ? (
-              <SkeletonRows rows={3} />
+              <SkeletonRows rows={2} />
             ) : health.data ? (
-              <div className="space-y-2">
-                <div className="mb-2 text-xs text-zinc-500">
+              <div className="space-y-3">
+                <div className="text-xs text-zinc-500">
                   default{" "}
                   <span className="font-mono text-zinc-300">
                     {health.data.default_provider} / {health.data.default_model}
                   </span>
                 </div>
-                {health.data.providers.map((p) => (
-                  <div
-                    key={p.provider}
-                    className="flex items-center justify-between rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2 text-sm"
-                  >
-                    <span className="flex items-center gap-2">
-                      <Dot on={p.available} />
-                      <span className="text-zinc-200">{p.provider}</span>
-                    </span>
-                    <span className="font-mono text-xs text-zinc-500">{p.class}</span>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5">
+                    <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-zinc-400">
+                      <Server size={12} /> Providers
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5 text-sm font-medium text-zinc-200">
+                      <Dot on={readyCount > 0} />
+                      {readyCount} of {realProviders.length} ready
+                    </div>
                   </div>
-                ))}
-                {!health.data.providers.some(
-                  (p) => p.available && p.provider !== "mock" && p.class !== "mock",
-                ) && (
+                  <div className="rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2.5">
+                    <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wide text-zinc-400">
+                      <ShieldCheck size={12} /> Browser vault
+                    </div>
+                    <div className="mt-1 flex items-center gap-1.5 text-sm font-medium text-zinc-200">
+                      <Dot on={vaultLoggedIn > 0} />
+                      {vaultLoggedIn} logged in
+                    </div>
+                  </div>
+                </div>
+                {readyCount === 0 && (
                   <Link
                     href="/connections"
-                    className="mt-1 flex items-center justify-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-2 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]"
+                    className="flex items-center justify-center gap-1.5 rounded-xl border border-accent/30 bg-accent/[0.08] px-3 py-2 text-xs font-medium text-accent-soft transition-colors hover:bg-accent/[0.14]"
                   >
                     <PlugZap size={14} /> Connect a real model <ArrowRight size={12} />
                   </Link>
@@ -520,32 +796,6 @@ export default function OverviewPage() {
             ) : (
               <Empty icon={<Server size={22} />} action={{ label: "Connect a model", href: "/connections" }}>
                 No provider data.
-              </Empty>
-            )}
-          </Card>
-
-          {/* Vault */}
-          <Card title="Browser vault" icon={<ShieldCheck size={15} />}>
-            {vault.loading && !vault.data ? (
-              <SkeletonRows rows={3} />
-            ) : vault.data && vault.data.providers.length > 0 ? (
-              <div className="space-y-2">
-                {vault.data.providers.map((p) => (
-                  <div
-                    key={p.provider}
-                    className="flex items-center justify-between rounded-xl border border-white/[0.05] bg-white/[0.02] px-3 py-2 text-sm"
-                  >
-                    <span className="text-zinc-200">{p.provider}</span>
-                    <Badge value={p.logged_in ? "logged in" : "logged out"} />
-                  </div>
-                ))}
-              </div>
-            ) : (
-              <Empty
-                icon={<ShieldCheck size={22} />}
-                action={{ label: "Connect a model", href: "/connections" }}
-              >
-                No vault providers configured.
               </Empty>
             )}
           </Card>
@@ -601,78 +851,82 @@ export default function OverviewPage() {
         </div>
       </Reveal>
 
-      {/* System health (the /diagnostics self-test, surfaced at a glance) */}
-      <Reveal>
-        <Card
-          title="System health"
-          icon={<HeartPulse size={15} />}
-          right={<span className="text-[11px] text-zinc-500">self-test</span>}
-        >
-          {diag.loading && !diag.data ? (
-            <SkeletonRows rows={2} />
-          ) : diag.data ? (
-            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-              <HealthItem
-                label="DB integrity"
-                value={diag.data.db_integrity === "ok" ? "ok" : diag.data.db_integrity || "—"}
-                status={diag.data.db_integrity === "ok" ? "ok" : "bad"}
-              />
-              <HealthItem
-                label="Secrets key"
-                value={
-                  diag.data.secrets_key_valid === false
-                    ? "invalid"
-                    : diag.data.secrets_key_present
-                      ? "valid"
-                      : "missing"
-                }
-                status={
-                  diag.data.secrets_key_valid === false || !diag.data.secrets_key_present
-                    ? "bad"
-                    : "ok"
-                }
-              />
-              <HealthItem
-                label="WAL size"
-                value={fmtBytes(diag.data.wal_bytes)}
-                status={(diag.data.wal_bytes || 0) > 64 * 1024 * 1024 ? "warn" : "neutral"}
-              />
-              <HealthItem
-                label="Running"
-                value={String(diag.data.running_sessions ?? 0)}
-                status="neutral"
-              />
-              <HealthItem
-                label="Pending reviews"
-                value={String(diag.data.pending_reviews ?? 0)}
-                status={(diag.data.pending_reviews || 0) > 0 ? "warn" : "neutral"}
-              />
-              <HealthItem
-                label="Worktrees"
-                value={String(diag.data.tracked_worktrees ?? 0)}
-                status="neutral"
-              />
-              {(() => {
-                const loops = diag.data.background_loops ?? {};
-                const bad = Object.entries(loops).filter(([, v]) => v && v.ok === false);
-                return (
-                  <HealthItem
-                    label="Boot loops"
-                    value={bad.length ? `${bad.length} failed` : "ok"}
-                    status={bad.length ? "bad" : "ok"}
-                  />
-                );
-              })()}
-            </div>
-          ) : (
-            <Empty icon={<HeartPulse size={22} />}>No diagnostics available.</Empty>
-          )}
-        </Card>
-      </Reveal>
+      {/* System health (the /diagnostics self-test, surfaced at a glance) — Advanced */}
+      {advanced && (
+        <Reveal>
+          <Card
+            title="System health"
+            icon={<HeartPulse size={15} />}
+            right={<span className="text-[11px] text-zinc-500">self-test</span>}
+          >
+            {diag.loading && !diag.data ? (
+              <SkeletonRows rows={2} />
+            ) : diag.data ? (
+              <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+                <HealthItem
+                  label="DB integrity"
+                  value={diag.data.db_integrity === "ok" ? "ok" : diag.data.db_integrity || "—"}
+                  status={diag.data.db_integrity === "ok" ? "ok" : "bad"}
+                />
+                <HealthItem
+                  label="Secrets key"
+                  value={
+                    diag.data.secrets_key_valid === false
+                      ? "invalid"
+                      : diag.data.secrets_key_present
+                        ? "valid"
+                        : "missing"
+                  }
+                  status={
+                    diag.data.secrets_key_valid === false || !diag.data.secrets_key_present
+                      ? "bad"
+                      : "ok"
+                  }
+                />
+                <HealthItem
+                  label="WAL size"
+                  value={fmtBytes(diag.data.wal_bytes)}
+                  status={(diag.data.wal_bytes || 0) > 64 * 1024 * 1024 ? "warn" : "neutral"}
+                />
+                <HealthItem
+                  label="Running"
+                  value={String(diag.data.running_sessions ?? 0)}
+                  status="neutral"
+                />
+                <HealthItem
+                  label="Pending reviews"
+                  value={String(diag.data.pending_reviews ?? 0)}
+                  status={(diag.data.pending_reviews || 0) > 0 ? "warn" : "neutral"}
+                />
+                <HealthItem
+                  label="Worktrees"
+                  value={String(diag.data.tracked_worktrees ?? 0)}
+                  status="neutral"
+                />
+                {(() => {
+                  const loops = diag.data.background_loops ?? {};
+                  const bad = Object.entries(loops).filter(([, v]) => v && v.ok === false);
+                  return (
+                    <HealthItem
+                      label="Boot loops"
+                      value={bad.length ? `${bad.length} failed` : "ok"}
+                      status={bad.length ? "bad" : "ok"}
+                    />
+                  );
+                })()}
+              </div>
+            ) : (
+              <Empty icon={<HeartPulse size={22} />}>No diagnostics available.</Empty>
+            )}
+          </Card>
+        </Reveal>
+      )}
 
-      <Reveal>
-        <EventStream />
-      </Reveal>
+      {advanced && (
+        <Reveal>
+          <EventStream />
+        </Reveal>
+      )}
     </PageShell>
   );
 }
