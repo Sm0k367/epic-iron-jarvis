@@ -1764,9 +1764,17 @@ function StudioView({
   } = useApi<{ clis: AiCli[] }>("/terminals/ai-clis");
   const { data: skillsData } = useApi<{ skills: Skill[] }>("/skills");
   const clis = useMemo(() => clisData?.clis ?? [], [clisData]);
-  const mediaSkills = useMemo(
-    () => (skillsData?.skills ?? []).filter(isMediaSkill),
+  // All discovered skills (alphabetical), split into a Media group (surfaced
+  // first) and Other — so the picker always has real options to choose from,
+  // not just "Auto", even when few skills match the media heuristic.
+  const allSkills = useMemo(
+    () => [...(skillsData?.skills ?? [])].sort((a, b) => a.name.localeCompare(b.name)),
     [skillsData],
+  );
+  const mediaSkills = useMemo(() => allSkills.filter(isMediaSkill), [allSkills]);
+  const otherSkills = useMemo(
+    () => allSkills.filter((s) => !isMediaSkill(s)),
+    [allSkills],
   );
 
   // Default engine: keep a still-installed stored pick, else claude, else first installed.
@@ -2908,7 +2916,7 @@ function StudioView({
   }
 
   /* ---- SETUP phase ---- */
-  const chosenSkill = skill ? mediaSkills.find((s) => s.name === skill) : undefined;
+  const chosenSkill = skill ? allSkills.find((s) => s.name === skill) : undefined;
   return (
     <>
       {lostNote && (
@@ -3025,26 +3033,49 @@ function StudioView({
       <Reveal>
         <Card title="2 · Skill" icon={<Wand2 size={15} />}>
           <div className="space-y-2">
-            <select
-              value={skill}
-              onChange={(e) => setSkill(e.target.value)}
-              aria-label="Skill"
-              className="w-full appearance-none rounded-xl border border-white/10 bg-ink-950 px-3 py-2 text-sm text-zinc-200 focus:border-accent/40 focus:outline-none"
-            >
-              <option value="">Auto — let the agent pick the best skill</option>
-              {skill && !mediaSkills.some((s) => s.name === skill) && (
-                <option value={skill}>{skill}</option>
-              )}
-              {mediaSkills.map((s) => (
-                <option key={s.name} value={s.name}>
-                  {s.name}
-                </option>
-              ))}
-            </select>
+            <div className="relative">
+              <select
+                value={skill}
+                onChange={(e) => setSkill(e.target.value)}
+                aria-label="Skill"
+                className="w-full appearance-none rounded-xl border border-white/10 bg-ink-950 px-3 py-2 pr-9 text-sm text-zinc-200 focus:border-accent/40 focus:outline-none"
+              >
+                <option value="">Auto — let the agent pick the best skill</option>
+                {/* A stored/custom skill no longer in the registry stays selectable. */}
+                {skill && !allSkills.some((s) => s.name === skill) && (
+                  <option value={skill}>{skill}</option>
+                )}
+                {mediaSkills.length > 0 && (
+                  <optgroup label="Media skills">
+                    {mediaSkills.map((s) => (
+                      <option key={s.name} value={s.name}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+                {otherSkills.length > 0 && (
+                  <optgroup label="All skills">
+                    {otherSkills.map((s) => (
+                      <option key={s.name} value={s.name}>
+                        {s.name}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
+              </select>
+              <ChevronDown
+                size={15}
+                aria-hidden="true"
+                className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500"
+              />
+            </div>
             <p className="text-[11px] text-zinc-500">
-              {skill
-                ? (chosenSkill?.description ?? "Skill not found in the current registry.")
-                : "The agent reads your brief and chooses the right media skill itself."}
+              {allSkills.length === 0
+                ? "Loading skills… (or none discovered yet — add skills under ~/.claude/skills)."
+                : skill
+                  ? (chosenSkill?.description ?? "Skill not found in the current registry.")
+                  : `The agent reads your brief and picks the right skill itself — or choose one of ${allSkills.length} discovered skills.`}
             </p>
           </div>
         </Card>
