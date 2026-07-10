@@ -47,6 +47,14 @@ _AUTOPILOT_FLAGS = {
 #: mode. The current cycle is: manual → accept-edits → plan → auto → manual.
 _SHIFT_TAB = "\x1b[Z"
 
+#: Bracketed-paste markers (DECSET 2004). Wrapping a brief in these tells the TUI
+#: "everything between is ONE literal paste" — so a long brief lands intact and no
+#: interior byte (or a following Enter) can split it into an orphan fragment. A
+#: TUI that supports pasting large text (Claude Code does) enables this mode while
+#: its composer is active, which is the only time the studio sends.
+_PASTE_BEGIN = "\x1b[200~"
+_PASTE_END = "\x1b[201~"
+
 #: Permission-mode banners Claude Code paints (ANSI already stripped by
 #: output_tail). CURRENT strings first, older aliases kept so a machine on an
 #: earlier Claude still works. Longer alternatives precede their prefixes so the
@@ -227,43 +235,40 @@ def _engage_claude_automode(session) -> None:
         setattr(session, "_studio_automode", True)
 
 
-#: A full-screen CLI TUI (Claude Code) ingests a bulk write as a bracketed
-#: PASTE, so a trailing "\r" lands as a newline INSIDE the composer instead of
-#: submitting it. We therefore send the text, let the paste settle, then press
-#: Enter as a SEPARATE keystroke. Without this the brief sits typed-but-unsent
-#: and nothing ever generates — the exact "chat initialises then stops" failure.
-_SUBMIT_SETTLE_SECONDS = 0.3
+#: Seconds to let a bracketed paste settle in the composer before the SEPARATE
+#: Enter that submits it. A "\r" sent too soon (or without bracketing) is
+#: captured as a newline inside the paste rather than a submit — or splits a long
+#: brief mid-stream — so give the TUI a moment to close the paste first.
+_SUBMIT_SETTLE_SECONDS = 0.5
 
 
 def _type_and_submit(session, text: str) -> None:
-    """Type ``text`` into the CLI, submit it with a distinct Enter press, and
-    VERIFY the turn actually started — retrying once if it didn't. The verify
-    step is what turns a silently-dropped brief (typed into a still-settling
-    composer) into a reliable send: after Enter we watch for the CLI to react
-    (its output grows / it paints the 'esc to interrupt' working bar); if nothing
-    happens we clear the composer (Ctrl-U) and re-send once."""
+    """Insert ``text`` as ONE atomic bracketed paste, then submit it with a
+    SEPARATE Enter, and confirm the turn started.
+
+    Bracketed paste is what makes a long brief land INTACT. Written raw, the TUI
+    treats a big blob as fast typing and the following Enter can split it
+    mid-stream — the bulk lands but the tail is orphaned and submitted as its own
+    stray message (the '…elling' of 'storytelling' the user hit). Wrapped in
+    \\x1b[200~ … \\x1b[201~ the whole brief is one literal paste no keystroke can
+    break. If the turn doesn't start (the Enter was swallowed while the paste
+    rendered), NUDGE once more with a lone Enter — never clear or re-type, which
+    duplicates/corrupts the brief."""
     import time
 
-    def _reacted(baseline_len: int) -> bool:
-        tail = session.output_tail()
-        return (_WORKING_MARKER in tail.lower()) or (len(tail) > baseline_len + 40)
-
-    for attempt in range(2):
-        baseline = len(session.output_tail())
-        session.write(text)
-        time.sleep(_SUBMIT_SETTLE_SECONDS)
-        session.write("\r")
-        # Watch briefly for the CLI to react. A real turn starts within ~1-2s.
-        for _ in range(12):
-            time.sleep(0.25)
-            if _reacted(baseline):
-                return
-            if not session.alive:
-                return
-        # No reaction — the composer likely swallowed a partial. Clear it
-        # (Ctrl-U) and try once more, then give up (the next /tail is honest).
-        session.write("\x15")
-        time.sleep(0.3)
+    session.write(_PASTE_BEGIN + text + _PASTE_END)
+    time.sleep(_SUBMIT_SETTLE_SECONDS)
+    session.write("\r")
+    # A real turn paints the "esc to interrupt" bar within ~1-3s; if it doesn't,
+    # the submit was swallowed — send exactly one more Enter (a harmless empty
+    # submit if it actually did start).
+    for _ in range(12):
+        time.sleep(0.25)
+        if not session.alive:
+            return
+        if _WORKING_MARKER in session.output_tail().lower():
+            return
+    session.write("\r")
 
 
 #: Media-generation skills the studio brief points the CLI at when the user

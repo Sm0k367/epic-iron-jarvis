@@ -210,6 +210,44 @@ def test_automode_answers_bypass_acceptance_then_confirms():
     assert getattr(session, "_studio_automode", False) is True
 
 
+def test_type_and_submit_sends_one_atomic_bracketed_paste():
+    """A brief must go in as ONE bracketed paste (\\x1b[200~ … \\x1b[201~) with a
+    SEPARATE Enter — never raw text a mistimed Enter could split into an orphan
+    fragment (the '…elling' of 'storytelling' the user saw)."""
+    from iron_jarvis.daemon.routes.creative import (
+        _PASTE_BEGIN,
+        _PASTE_END,
+        _type_and_submit,
+    )
+
+    brief = "A 15-second cinematic night pursuit, Hollywood-quality storytelling"
+
+    class _Sess:
+        alive = True
+
+        def __init__(self) -> None:
+            self.writes: list[str] = []
+            self.tail = ""
+
+        def output_tail(self) -> str:
+            return self.tail
+
+        def write(self, d) -> None:
+            self.writes.append(d)
+            if d == "\r":  # a real CLI starts its turn right after the submit
+                self.tail = "… esc to interrupt …"
+
+    s = _Sess()
+    _type_and_submit(s, brief)
+    # The ENTIRE brief is one atomic paste, then a distinct Enter.
+    assert s.writes[0] == _PASTE_BEGIN + brief + _PASTE_END
+    assert s.writes[1] == "\r"
+    # The brief is never written raw/unwrapped (which is what split it), and the
+    # turn was detected so no destructive clear/re-type happened.
+    assert not any(w == brief for w in s.writes)
+    assert "\x15" not in s.writes  # no Ctrl-U — that produced stray keystrokes
+
+
 def test_derive_phase_lifecycle():
     """booting → thinking (fresh esc-to-interrupt) → idle → exited, with the
     freshness guard keeping a STALE marker from reading as a live turn."""
