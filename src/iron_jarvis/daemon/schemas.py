@@ -478,6 +478,14 @@ class ToolGenerateBody(BaseModel):
     model: str = ""
 
 
+class ConnectorConnectBody(BaseModel):
+    """One-tap connect for a marketplace connector. ``values`` carries the
+    connector's field inputs (MCP token/env/arg fields), or ``{"key": "..."}``
+    for an api-key connector. OAuth connectors need no values."""
+
+    values: dict[str, str] = {}
+
+
 class ReflexRuleBody(BaseModel):
     """A Reflex rule: bind an inbound signal (webhook slug / comm keyword) to an
     action (run a workflow / remote agent / session)."""

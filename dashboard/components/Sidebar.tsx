@@ -23,6 +23,7 @@ import {
   Plug,
   PlugZap,
   Megaphone,
+  Store,
   Webhook,
   Zap,
   MonitorCog,
@@ -101,6 +102,7 @@ const NAV: NavSection[] = [
   {
     label: "Connections",
     items: [
+      { href: "/marketplace", label: "Marketplace", icon: Store },
       { href: "/connections", label: "Connections", icon: PlugZap },
       { href: "/secrets", label: "Secrets", icon: KeyRound },
       { href: "/integrations", label: "Integrations", icon: Plug },

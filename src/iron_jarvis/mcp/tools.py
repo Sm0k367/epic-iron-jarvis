@@ -141,10 +141,31 @@ def _build_transport(cfg: dict[str, Any], secret_resolver: SecretResolver | None
         return HttpTransport(cfg["url"], headers=headers)
 
     # Default: stdio subprocess.
+    #
+    # env resolution: literal ``env`` entries, plus ``env_secrets`` (a map of
+    # ENV_VAR -> vault secret name) resolved through ``secret_resolver`` at LAUNCH
+    # — so a connector's token (GitHub PAT, Slack bot token, …) stays encrypted in
+    # the vault instead of living plaintext in config.toml. Anything provided is
+    # MERGED onto ``os.environ`` (never replaces it): Popen(env=…) replaces the
+    # whole environment, so a bare {TOKEN: …} would drop PATH and npx/uvx would
+    # fail to launch. When nothing is added we pass ``None`` to inherit as before.
+    import os as _os
+
+    env: dict[str, str] = dict(cfg.get("env") or {})
+    env_secrets = cfg.get("env_secrets")
+    if isinstance(env_secrets, dict) and secret_resolver is not None:
+        for env_key, secret_name in env_secrets.items():
+            try:
+                value = secret_resolver(str(secret_name))
+            except Exception:  # noqa: BLE001 — a vault miss just omits the var
+                value = None
+            if value:
+                env[str(env_key)] = value
+    merged_env = {**_os.environ, **env} if env else None
     return StdioTransport(
         cfg["command"],
         cfg.get("args"),
-        env=cfg.get("env"),
+        env=merged_env,
         cwd=cfg.get("cwd"),
     )
 
