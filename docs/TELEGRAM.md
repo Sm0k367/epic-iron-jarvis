@@ -41,7 +41,8 @@ uv run python scripts/brand_telegram_profile.py --photo path\to\logo.png
 ```
 
 This sets **Epic Tech AI** display name, description, about, command menu, and
-profile photo (`desktop/assets/icon.png` by default).
+profile photo (`desktop/assets/epic-tech-ai-bot-avatar.png` by default — cyan
+arc-reactor **E** mark, high contrast for small chat lists).
 
 Or via BotFather:
 

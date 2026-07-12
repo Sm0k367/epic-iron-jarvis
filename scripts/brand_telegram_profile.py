@@ -58,8 +58,8 @@ def main() -> int:
     parser.add_argument(
         "--photo",
         type=Path,
-        default=ROOT / "desktop" / "assets" / "icon.png",
-        help="Profile photo (PNG/JPG, square preferred)",
+        default=ROOT / "desktop" / "assets" / "epic-tech-ai-bot-avatar.png",
+        help="Profile photo (PNG/JPG, square preferred) — Epic Tech AI brand mark",
     )
     parser.add_argument("--skip-photo", action="store_true")
     args = parser.parse_args()
