@@ -119,10 +119,20 @@ When an **allowlisted** user asks the bot to generate media in free text, e.g.:
 - `make a video of ocean waves`
 - `compose a song about rain`
 
+### Photo → video (image-to-video)
+
+1. Send a **photo** (or image document) in the private chat  
+2. Caption it, e.g. `make a video of this` / `animate this` / `bring this to life`  
+3. Photo-only (no caption) defaults to: animate the still into a short video  
+
+Epic Tech AI will download the still, run **image-to-video** via Pixio
+(`pixio_upload` of the photo → video model → `pixio_generate`), and **attach
+the video** on the reply. The original upload is not re-sent as the “result”.
+
 Epic Tech AI will:
 
-1. Run a full agent session with **required** Pixio tools (`pixio_models` → `pixio_params` → `pixio_generate`)
-2. If the agent finishes **without** media files, run a **direct Pixio fallback** into the session workspace
+1. Run a full agent session with **required** Pixio tools (`pixio_models` → `pixio_params` → `pixio_generate`; plus `pixio_upload` when a photo is attached)
+2. If the agent finishes **without** media files, run a **direct Pixio fallback** into the session workspace (image-to-video when a photo was uploaded)
 3. **Attach** generated files on the Telegram reply (`sendPhoto` / `sendVideo` / `sendAudio` / document)
 
 **Required for media:** a Pixio key in the vault.

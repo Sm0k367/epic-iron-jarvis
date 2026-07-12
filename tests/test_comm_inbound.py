@@ -396,7 +396,7 @@ async def test_media_request_uses_media_ack_and_fallback_when_no_files(platform,
 
     poller, orch = _poller(platform, ch)
 
-    async def _fake_ensure(user_text, workspace, *, session_id=""):
+    async def _fake_ensure(user_text, workspace, *, session_id="", reference_images=None):
         root = Path(workspace)
         root.mkdir(parents=True, exist_ok=True)
         out = root / "pixio" / "fallback.png"
@@ -436,3 +436,115 @@ async def test_non_media_message_does_not_force_fallback(platform, monkeypatch):
     assert results[0]["status"] == "handled"
     assert results[0].get("media_intent") is False
     assert called["n"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# PHOTO UPLOAD → image-to-video
+# --------------------------------------------------------------------------- #
+def _photo_update(update_id: int, sender: int, *, caption: str = "", file_id: str = "FILE1") -> dict:
+    msg: dict[str, Any] = {
+        "from": {"id": sender, "is_bot": False},
+        "chat": {"id": sender},
+        "photo": [
+            {"file_id": "small", "file_unique_id": "u1", "width": 90, "height": 90, "file_size": 100},
+            {"file_id": file_id, "file_unique_id": "u2", "width": 800, "height": 600, "file_size": 5000},
+        ],
+    }
+    if caption:
+        msg["caption"] = caption
+    return {"update_id": update_id, "message": msg}
+
+
+def test_telegram_poll_accepts_photo_with_caption():
+    fake = FakeTelegram([_photo_update(70, 777, caption="make a video of this")])
+    ch = _telegram(
+        fake,
+        {"token_secret": "tg_token", "inbound_enabled": True, "allowed_senders": [777]},
+    )
+    messages, next_offset = ch.poll(0)
+    assert next_offset == 71
+    assert len(messages) == 1
+    m = messages[0]
+    assert m.text == "make a video of this"
+    assert len(m.attachments) == 1
+    assert m.attachments[0].file_id == "FILE1"
+    assert m.attachments[0].kind == "photo"
+
+
+def test_telegram_poll_accepts_photo_only_without_caption():
+    fake = FakeTelegram([_photo_update(71, 777, caption="")])
+    ch = _telegram(
+        fake,
+        {"token_secret": "tg_token", "inbound_enabled": True, "allowed_senders": [777]},
+    )
+    messages, _ = ch.poll(0)
+    assert len(messages) == 1
+    assert messages[0].text == ""
+    assert messages[0].attachments[0].file_id == "FILE1"
+
+
+def test_media_kind_defaults_to_video_with_reference_photo():
+    assert InboundPoller._media_kind("make a video", has_reference_image=True) == "video"
+    assert InboundPoller._media_kind("animate this", has_reference_image=True) == "video"
+    assert InboundPoller._media_kind("hello", has_reference_image=True) == "video"
+    assert InboundPoller._media_kind("generate an image of a cat", has_reference_image=False) == "image"
+
+
+def test_collect_session_media_excludes_inbound_uploads(tmp_path):
+    inbound = tmp_path / "inbound"
+    inbound.mkdir()
+    (inbound / "photo.jpg").write_bytes(b"\xff\xd8\xff" + b"0" * 32)
+    pix = tmp_path / "pixio"
+    pix.mkdir()
+    (pix / "out.mp4").write_bytes(b"ftyp" + b"0" * 64)
+    found = InboundPoller._collect_session_media(
+        str(tmp_path), exclude_paths={str(inbound / "photo.jpg")}
+    )
+    assert len(found) == 1 and found[0].name == "out.mp4"
+
+
+async def test_photo_upload_triggers_video_pipeline(platform, monkeypatch):
+    """Photo + caption 'make a video' downloads the still, runs i2v fallback, attaches video."""
+    fake = FakeTelegram([_photo_update(80, 777, caption="make a video of this moving")])
+    ch = _telegram(
+        fake,
+        {"token_secret": "tg_token", "inbound_enabled": True, "allowed_senders": [777]},
+    )
+    media_sent: list[str] = []
+
+    def _send_media(path, *, chat_id=None, caption="", kind=None):
+        media_sent.append(str(path))
+        return {"ok": True, "detail": "fake", "path": str(path)}
+
+    ch.send_media = _send_media  # type: ignore[method-assign]
+
+    def _download(att, dest):
+        p = Path(dest)
+        if p.is_dir():
+            p = p / "photo.jpg"
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"\xff\xd8\xff" + b"JPG" * 20)
+        return {"ok": True, "path": str(p), "detail": "saved", "bytes": p.stat().st_size}
+
+    ch.download_attachment = _download  # type: ignore[method-assign]
+
+    poller, orch = _poller(platform, ch)
+
+    async def _fake_ensure(user_text, workspace, *, session_id="", reference_images=None):
+        assert reference_images, "reference photo must be downloaded for i2v"
+        root = Path(workspace)
+        out = root / "pixio" / "out.mp4"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"ftypisom" + b"0" * 64)
+        return {"ok": True, "model_id": "pixio/veo", "kind": "video", "saved_path": "pixio/out.mp4"}
+
+    monkeypatch.setattr(poller, "_ensure_media_generated", _fake_ensure)
+
+    results = await poller.poll_once()
+    assert results[0]["status"] == "handled"
+    assert results[0].get("media_intent") is True
+    assert results[0].get("media_fallback") is True
+    assert results[0].get("media_sent", 0) >= 1
+    assert any(p.endswith(".mp4") for p in media_sent)
+    texts = [s.get("text") or "" for s in fake.sent if s.get("text")]
+    assert any("photo" in t.lower() and "video" in t.lower() for t in texts)

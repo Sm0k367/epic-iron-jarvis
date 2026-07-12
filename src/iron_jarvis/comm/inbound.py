@@ -267,14 +267,19 @@ class InboundPoller:
             return {"channel": name, "status": "non_private", "sender": str(msg.sender_id)}
 
         text = (msg.text or "").strip()
-        if not text:
+        attachments = list(getattr(msg, "attachments", None) or [])
+        if not text and not attachments:
             return {"channel": name, "status": "empty"}
+        # Photo-only uploads still need an instruction; default to image-to-video
+        # when a still is attached with no caption so the bot doesn't no-op.
+        if not text and attachments:
+            text = "Animate this uploaded image into a short video."
 
         # COMMAND GRAMMAR: an authorized "/command" is a fast, deterministic
         # operation (status / run a workflow / cancel / ask a remote agent),
         # replied immediately — no agent session spun up. Non-command text falls
-        # through to the normal session path below.
-        if self.command_interpreter is not None and text.startswith("/"):
+        # through to the normal session path below. (Commands never carry media.)
+        if self.command_interpreter is not None and text.startswith("/") and not attachments:
             await asyncio.to_thread(ch.typing, msg.reply_to)
             reply = await self.command_interpreter.interpret(text)
             if reply is not None:
@@ -317,13 +322,20 @@ class InboundPoller:
         # Live chat UX: typing indicator + short "working" ack, then run the
         # session while refreshing typing so Telegram shows activity.
         chat_id = msg.reply_to
-        media_intent = self._detect_media_intent(text)
+        # Photo upload and/or explicit generate language → media pipeline.
+        media_intent = self._detect_media_intent(text) or bool(attachments)
         await asyncio.to_thread(ch.typing, chat_id)
-        ack = (
-            "Generating that media for you…"
-            if media_intent
-            else "Working on it…"
-        )
+        if attachments:
+            kind_hint = self._media_kind(text, has_reference_image=True)
+            ack = (
+                "Got your photo — generating the video…"
+                if kind_hint == "video"
+                else "Got your photo — generating media…"
+            )
+        elif media_intent:
+            ack = "Generating that media for you…"
+        else:
+            ack = "Working on it…"
         await asyncio.to_thread(
             ch.send, self._format_reply(ack), chat_id=chat_id
         )
@@ -334,17 +346,41 @@ class InboundPoller:
         # When the user clearly asked for media, the task is hard-required to
         # call pixio_* AND we fall back to a direct Pixio generation if the
         # agent finishes without leaving files (so Telegram always gets media).
+        # Uploaded photos are downloaded into the session workspace first and
+        # used as image-to-video reference frames when a video is requested.
         cfg = getattr(getattr(self.orchestrator, "p", None), "config", None)
         provider = getattr(cfg, "default_provider", None) if cfg else None
         model = getattr(cfg, "default_model", None) if cfg else None
-        task = self._build_session_task(text, media_intent=media_intent)
+
+        # Create the session first so we have a workspace for inbound downloads.
+        task_placeholder = self._build_session_task(
+            text, media_intent=media_intent, reference_images=[]
+        )
         session = await self.orchestrator.create_session(
-            task,
+            task_placeholder,
             self.agent_type,
             provider=provider,
             model=model,
             origin="comm",
         )
+        workspace = getattr(session, "workspace_path", "") or ""
+        reference_images = await self._download_inbound_attachments(
+            ch, attachments, workspace
+        )
+        # Rebuild the task with concrete local paths once downloads finish so
+        # the agent sees image-to-video instructions + workspace paths.
+        if reference_images:
+            task = self._build_session_task(
+                text, media_intent=True, reference_images=reference_images
+            )
+            try:
+                session.task = task
+                save = getattr(self.orchestrator, "_save", None)
+                if callable(save):
+                    save(session)
+            except Exception:  # noqa: BLE001 — task update is best-effort
+                log.exception("failed to persist media task with reference images")
+
         # Suppress the generic session.completed push-alert — we reply in-chat.
         notifier = getattr(self, "notifier", None)
         if notifier is not None and hasattr(notifier, "suppress_session_alert"):
@@ -356,6 +392,8 @@ class InboundPoller:
                 "sender": msg.sender_id,
                 "task": text,
                 "media_intent": bool(media_intent),
+                "attachments": len(attachments),
+                "reference_images": len(reference_images),
             },
             session_id=session.id,
         )
@@ -370,22 +408,31 @@ class InboundPoller:
                 continue
         session = await run_task
 
-        workspace = getattr(session, "workspace_path", "") or ""
-        media_paths = self._collect_session_media(workspace)
+        workspace = getattr(session, "workspace_path", "") or workspace
+        # Exclude the user's uploaded reference stills from "generated" media —
+        # only newly produced outputs under pixio/ (or non-inbound paths) attach.
+        media_paths = self._collect_session_media(
+            workspace, exclude_paths=set(reference_images)
+        )
         media_fallback = False
         media_error = ""
 
         # Guarantee: if the user asked for media and the agent produced none,
-        # generate directly via Pixio and drop files into the session workspace.
+        # generate directly via Pixio (image-to-video when a photo was uploaded).
         if media_intent and not media_paths:
             await asyncio.to_thread(ch.typing, chat_id)
             try:
                 fb = await self._ensure_media_generated(
-                    text, workspace, session_id=getattr(session, "id", "") or ""
+                    text,
+                    workspace,
+                    session_id=getattr(session, "id", "") or "",
+                    reference_images=reference_images,
                 )
                 media_fallback = bool(fb.get("ok"))
                 media_error = str(fb.get("error") or "")
-                media_paths = self._collect_session_media(workspace)
+                media_paths = self._collect_session_media(
+                    workspace, exclude_paths=set(reference_images)
+                )
             except Exception as exc:  # noqa: BLE001 — never kill the text reply
                 log.exception("telegram media fallback failed")
                 media_error = f"{type(exc).__name__}: {exc}"
@@ -462,21 +509,39 @@ class InboundPoller:
         return bool(_MEDIA_INTENT_RX.search(t))
 
     @staticmethod
-    def _media_kind(text: str) -> str:
-        """Best-effort media kind for model selection: image | video | audio."""
+    def _media_kind(text: str, *, has_reference_image: bool = False) -> str:
+        """Best-effort media kind for model selection: image | video | audio.
+
+        When a photo was uploaded, default to **video** (image-to-video) unless
+        the user explicitly asked for audio only.
+        """
         t = text or ""
-        # Explicit modality keywords win; default to image for "generate a picture of…"
-        if re.search(r"(?is)\b(video|videos|clip|clips|animation|animations|gif|gifs)\b", t):
-            return "video"
         if re.search(
             r"(?is)\b(audio|song|songs|music|track|sound|sounds|voiceover|soundtrack)\b",
             t,
-        ):
+        ) and not re.search(r"(?is)\b(video|clip|animate)\b", t):
             return "audio"
+        if re.search(
+            r"(?is)\b(video|videos|clip|clips|animation|animations|gif|gifs|"
+            r"animate|motion|i2v|img2vid|bring\s+to\s+life)\b",
+            t,
+        ):
+            return "video"
+        if has_reference_image:
+            # Uploaded still + "generate" / default caption → animate to video.
+            return "video"
         return "image"
 
-    def _build_session_task(self, text: str, *, media_intent: bool) -> str:
-        """Build the BUILDER task for a Telegram free-text message."""
+    def _build_session_task(
+        self,
+        text: str,
+        *,
+        media_intent: bool,
+        reference_images: list[str] | None = None,
+    ) -> str:
+        """Build the BUILDER task for a Telegram free-text / photo message."""
+        refs = [p for p in (reference_images or []) if p]
+        has_ref = bool(refs)
         base = (
             "You are Epic Tech AI — the user's local AI operating system on this "
             "machine (brand: Epic Tech AI · epictechai@gmail.com · X @EpicTechAI). "
@@ -493,8 +558,8 @@ class InboundPoller:
             "Do not invent tool results. If you only need to talk, just talk.\n"
             "Finish with a short plain-language summary of what you did.\n\n"
         )
-        if media_intent:
-            kind = self._media_kind(text)
+        if media_intent or has_ref:
+            kind = self._media_kind(text, has_reference_image=has_ref)
             base += (
                 "MEDIA REQUEST — REQUIRED:\n"
                 f"The user asked you to GENERATE {kind} media. You MUST call "
@@ -502,17 +567,86 @@ class InboundPoller:
                 "pixio_generate with wait=true and a clear prompt derived from "
                 "their message. Do NOT only describe the media — actually generate "
                 "it. Leave the file under pixio/ in the workspace.\n"
+            )
+            if has_ref and kind == "video":
+                paths = ", ".join(refs)
+                base += (
+                    "IMAGE-TO-VIDEO — the user UPLOADED a reference photo. "
+                    "You MUST use it as the source frame:\n"
+                    f"  Local file(s): {paths}\n"
+                    "1) Call pixio_upload with path=<that file> to get a permanent "
+                    "public URL (or use the path if the model accepts local refs).\n"
+                    "2) Call pixio_params on an image-to-video / video model and pass "
+                    "the uploaded image URL into the param the schema lists "
+                    "(often image / image_url / init_image / first_frame / url).\n"
+                    "3) pixio_generate with wait=true; leave the VIDEO under pixio/.\n"
+                    "Do NOT ignore the uploaded photo. Do NOT only generate a new still.\n"
+                )
+            base += (
                 "If Pixio is unavailable, say so plainly in the summary.\n\n"
             )
+        if refs:
+            base += "Uploaded reference files (workspace paths):\n"
+            for p in refs:
+                base += f"- {p}\n"
+            base += "\n"
         return base + f"User message:\n{text}"
 
+    async def _download_inbound_attachments(
+        self, ch: Channel, attachments: list[Any], workspace: str
+    ) -> list[str]:
+        """Download Telegram photos into ``workspace/inbound/``; return local paths."""
+        if not attachments:
+            return []
+        download = getattr(ch, "download_attachment", None)
+        if not callable(download):
+            log.warning("channel %s cannot download attachments", getattr(ch, "name", "?"))
+            return []
+        root = Path(workspace or "")
+        if not root.is_dir():
+            try:
+                root.mkdir(parents=True, exist_ok=True)
+            except OSError:
+                return []
+        inbound_dir = root / "inbound"
+        inbound_dir.mkdir(parents=True, exist_ok=True)
+        saved: list[str] = []
+        for i, att in enumerate(attachments):
+            # Prefer photo/document images only for image-to-video refs.
+            kind = getattr(att, "kind", None) or (
+                att.get("kind") if isinstance(att, dict) else ""
+            )
+            if str(kind) not in ("photo", "document", "image", ""):
+                continue
+            name = getattr(att, "file_name", None) or (
+                att.get("file_name") if isinstance(att, dict) else None
+            ) or f"upload_{i}.jpg"
+            safe = re.sub(r"[^A-Za-z0-9._-]", "_", Path(str(name)).name) or f"upload_{i}.jpg"
+            dest = inbound_dir / safe
+            try:
+                res = await asyncio.to_thread(download, att, dest)
+            except Exception:  # noqa: BLE001
+                log.exception("download_attachment failed")
+                continue
+            if res and res.get("ok") and res.get("path"):
+                saved.append(str(res["path"]))
+            elif res and res.get("ok") and dest.is_file():
+                saved.append(str(dest))
+        return saved
+
     async def _ensure_media_generated(
-        self, user_text: str, workspace: str, *, session_id: str = ""
+        self,
+        user_text: str,
+        workspace: str,
+        *,
+        session_id: str = "",
+        reference_images: list[str] | None = None,
     ) -> dict[str, Any]:
         """Direct Pixio generation into the session workspace (Telegram guarantee).
 
         Used when media intent was detected but the agent session left no media
-        files. Never raises — returns ``{ok, error?}``.
+        files. When ``reference_images`` is set, runs image-to-video (upload
+        still → video model). Never raises — returns ``{ok, error?}``.
         """
         root = Path(workspace or "")
         if not root.is_dir():
@@ -546,7 +680,7 @@ class InboundPoller:
             }
 
         from ..tools.base import ToolContext
-        from ..tools.pixio import PixioGenerateTool, PixioModelsTool
+        from ..tools.pixio import PixioGenerateTool, PixioModelsTool, PixioUploadTool
 
         cfg = getattr(platform, "config", None)
         event_bus = getattr(platform, "event_bus", None)
@@ -566,7 +700,6 @@ class InboundPoller:
                 kind: str,
                 sid: str | None,
             ) -> Any:
-                # Match ArtifactSink call order from pixio._deliver.
                 return artifacts.save(
                     name,
                     blob,
@@ -577,8 +710,6 @@ class InboundPoller:
 
             artifact_sink = _sink
 
-        # ToolContext requires config/event_bus/engine; when missing, tools still
-        # only need workspace for delivery.
         if cfg is None or event_bus is None or engine is None:
             return {"ok": False, "error": "platform incomplete for media generation"}
 
@@ -590,6 +721,9 @@ class InboundPoller:
             event_bus=event_bus,
             engine=engine,
         )
+
+        refs = [p for p in (reference_images or []) if p and Path(p).is_file()]
+        kind = self._media_kind(user_text, has_reference_image=bool(refs))
 
         models_tool = PixioModelsTool(
             key_resolver=_key_resolver, artifact_sink=artifact_sink
@@ -604,27 +738,69 @@ class InboundPoller:
 
         model_id = self._pick_pixio_model(
             (models_res.data or {}).get("models") or [],
-            kind=self._media_kind(user_text),
+            kind=kind,
         )
         if not model_id:
             return {"ok": False, "error": "no suitable Pixio model available"}
 
         prompt = self._media_prompt(user_text)
+        params: dict[str, Any] = {"prompt": prompt}
+
+        # Image-to-video: publish the still, pass public URL into common param names.
+        if refs and kind == "video":
+            upload_tool = PixioUploadTool(
+                key_resolver=_key_resolver, artifact_sink=artifact_sink
+            )
+            up = await upload_tool.execute(
+                {"path": refs[0], "endpoint": "images"}, ctx
+            )
+            if not up.ok:
+                # Retry as generic media endpoint.
+                up = await upload_tool.execute(
+                    {"path": refs[0], "endpoint": "media"}, ctx
+                )
+            if not up.ok:
+                return {
+                    "ok": False,
+                    "error": up.error or "failed to upload reference image to Pixio",
+                }
+            public_url = str((up.data or {}).get("url") or "").strip()
+            if not public_url:
+                return {"ok": False, "error": "pixio_upload returned no public url"}
+            # Cover common image-to-video param names across models.
+            for key_name in (
+                "image",
+                "image_url",
+                "imageUrl",
+                "init_image",
+                "initImage",
+                "first_frame",
+                "firstFrame",
+                "url",
+                "input_image",
+                "reference_image",
+            ):
+                params[key_name] = public_url
+
         gen_res = await gen_tool.execute(
             {
                 "model_id": model_id,
-                "params": {"prompt": prompt},
+                "params": params,
                 "wait": True,
-                "timeout_seconds": 300,
+                "timeout_seconds": 600 if kind == "video" else 300,
             },
             ctx,
         )
         if not gen_res.ok:
+            # If the model rejected extra image params, retry video with prompt-only
+            # is wrong for i2v — surface the error honestly.
             return {"ok": False, "error": gen_res.error or "pixio_generate failed"}
         return {
             "ok": True,
             "model_id": model_id,
+            "kind": kind,
             "saved_path": (gen_res.data or {}).get("saved_path"),
+            **({"reference": refs[0]} if refs else {}),
         }
 
     @staticmethod
@@ -692,11 +868,23 @@ class InboundPoller:
         return t or (user_text or "").strip() or "abstract digital art"
 
     @staticmethod
-    def _collect_session_media(workspace: str) -> list[Path]:
-        """Newest media files under a session workspace (pixio/ + root), capped."""
+    def _collect_session_media(
+        workspace: str, *, exclude_paths: set[str] | None = None
+    ) -> list[Path]:
+        """Newest media files under a session workspace (pixio/ + root), capped.
+
+        ``exclude_paths`` skips user-uploaded reference stills so we only attach
+        newly generated outputs (not the inbound photo itself).
+        """
         root = Path(workspace or "")
         if not root.is_dir():
             return []
+        skip: set[str] = set()
+        for raw in exclude_paths or set():
+            try:
+                skip.add(str(Path(raw).resolve()))
+            except OSError:
+                skip.add(str(raw))
         found: list[Path] = []
         try:
             for p in root.rglob("*"):
@@ -704,6 +892,15 @@ class InboundPoller:
                     continue
                 if p.suffix.lower() not in _MEDIA_EXTS:
                     continue
+                # Never re-send the user's uploaded reference photo as "output".
+                try:
+                    if str(p.resolve()) in skip:
+                        continue
+                    # Also skip anything under inbound/ (download staging).
+                    if "inbound" in p.parts:
+                        continue
+                except OSError:
+                    pass
                 # Skip huge accidental dumps
                 try:
                     if p.stat().st_size <= 0 or p.stat().st_size > 50 * 1024 * 1024:

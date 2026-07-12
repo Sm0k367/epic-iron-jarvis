@@ -32,6 +32,24 @@ SecretResolver = Callable[[str], "str | None"]
 
 
 @dataclass
+class InboundAttachment:
+    """One media file attached to an inbound message (e.g. Telegram photo).
+
+    ``file_id`` is the channel-native handle used to download the bytes
+    (Telegram Bot API ``file_id``). ``kind`` is a coarse type
+    (``photo`` / ``document`` / ``video`` / ``audio`` / ``voice``).
+    ``file_unique_id`` / ``file_name`` / ``mime_type`` are optional metadata.
+    """
+
+    file_id: str
+    kind: str = "photo"
+    file_unique_id: str = ""
+    file_name: str = ""
+    mime_type: str = ""
+    file_size: int = 0
+
+
+@dataclass
 class InboundMessage:
     """One inbound message received on a channel (the receive leg).
 
@@ -39,7 +57,9 @@ class InboundMessage:
     Telegram user/chat id, as a string). ``reply_to`` is whatever the channel
     needs to address a reply back (Telegram: the chat id). ``update_id`` drives
     the durable polling offset. ``is_bot`` lets the poller ignore the bot's own
-    / other bots' messages (loop protection).
+    / other bots' messages (loop protection). ``attachments`` holds inbound
+    media (photos, documents, …) so the poller can download + use them
+    (image-to-video, etc.).
     """
 
     sender_id: str
@@ -48,6 +68,7 @@ class InboundMessage:
     reply_to: Any = None
     is_bot: bool = False
     raw: dict[str, Any] = field(default_factory=dict)
+    attachments: list[InboundAttachment] = field(default_factory=list)
 
 
 def _no_transport(url: str, payload: dict[str, Any]) -> Any:  # pragma: no cover

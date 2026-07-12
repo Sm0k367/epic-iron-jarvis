@@ -14,16 +14,18 @@ from pathlib import Path
 from typing import Any
 
 from ..core.logging import get_logger
-from .base import Channel, InboundMessage
+from .base import Channel, InboundAttachment, InboundMessage
 
 _log = get_logger("comm")
 
 #: Telegram Bot API media limits (bytes) — stay under documented caps.
 _TG_PHOTO_MAX = 10 * 1024 * 1024
 _TG_DOC_MAX = 50 * 1024 * 1024
+_TG_DOWNLOAD_MAX = 20 * 1024 * 1024  # inbound download cap (image-to-video refs)
 _TG_PHOTO_EXTS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp"})
 _TG_VIDEO_EXTS = frozenset({".mp4", ".webm", ".mov"})
 _TG_AUDIO_EXTS = frozenset({".mp3", ".wav", ".ogg", ".m4a"})
+_TG_INBOUND_IMAGE_EXTS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp", ".bmp"})
 
 SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
 TELEGRAM_API = "https://api.telegram.org"
@@ -205,8 +207,10 @@ class TelegramChannel(Channel):
     def poll(
         self, offset: int = 0, *, timeout: int = 0
     ) -> tuple[list[InboundMessage], int]:
-        """Long-poll ``getUpdates`` and parse text messages.
+        """Long-poll ``getUpdates`` and parse text + photo/document messages.
 
+        Photos (and image documents) are accepted so users can upload a still
+        and ask for a video. Caption is treated as the user text when present.
         Passing ``offset`` confirms (and so DROPS server-side) every update with
         a lower id, which is what makes the durable offset dedupe across
         restarts. Returns ``(messages, next_offset)`` where ``next_offset`` is
@@ -230,9 +234,10 @@ class TelegramChannel(Channel):
             if isinstance(update_id, int):
                 next_offset = max(next_offset, update_id + 1)
             msg = upd.get("message") or upd.get("edited_message") or {}
-            text = msg.get("text")
-            if not text:
-                continue  # ignore non-text updates (photos, joins, ...)
+            text = (msg.get("text") or msg.get("caption") or "").strip()
+            attachments = self._extract_attachments(msg)
+            if not text and not attachments:
+                continue  # ignore joins, stickers without caption, etc.
             frm = msg.get("from") or {}
             chat = msg.get("chat") or {}
             messages.append(
@@ -243,9 +248,122 @@ class TelegramChannel(Channel):
                     reply_to=chat.get("id"),
                     is_bot=bool(frm.get("is_bot", False)),
                     raw=upd,
+                    attachments=attachments,
                 )
             )
         return messages, next_offset
+
+    @staticmethod
+    def _extract_attachments(msg: dict[str, Any]) -> list[InboundAttachment]:
+        """Pull photo / image-document file_ids from a Telegram message payload."""
+        out: list[InboundAttachment] = []
+        photos = msg.get("photo") or []
+        if isinstance(photos, list) and photos:
+            # Telegram sends several sizes; take the largest (last).
+            best = photos[-1] if isinstance(photos[-1], dict) else {}
+            fid = str(best.get("file_id") or "").strip()
+            if fid:
+                out.append(
+                    InboundAttachment(
+                        file_id=fid,
+                        kind="photo",
+                        file_unique_id=str(best.get("file_unique_id") or ""),
+                        file_name="photo.jpg",
+                        mime_type="image/jpeg",
+                        file_size=int(best.get("file_size") or 0),
+                    )
+                )
+        doc = msg.get("document")
+        if isinstance(doc, dict):
+            mime = str(doc.get("mime_type") or "").lower()
+            name = str(doc.get("file_name") or "document")
+            ext = Path(name).suffix.lower()
+            is_image = mime.startswith("image/") or ext in _TG_INBOUND_IMAGE_EXTS
+            if is_image:
+                fid = str(doc.get("file_id") or "").strip()
+                if fid:
+                    out.append(
+                        InboundAttachment(
+                            file_id=fid,
+                            kind="document",
+                            file_unique_id=str(doc.get("file_unique_id") or ""),
+                            file_name=name or "upload.png",
+                            mime_type=mime or "application/octet-stream",
+                            file_size=int(doc.get("file_size") or 0),
+                        )
+                    )
+        return out
+
+    def download_attachment(
+        self, attachment: InboundAttachment | dict[str, Any], dest: str | Path
+    ) -> dict[str, Any]:
+        """Download a Telegram file_id to ``dest`` via getFile + file path.
+
+        Returns ``{"ok": bool, "path"?: str, "detail": str}``. Uses the injected
+        ``http_get`` for getFile metadata; the binary body is fetched with a
+        direct GET (httpx) because the DI transport is JSON-oriented.
+        """
+        if isinstance(attachment, InboundAttachment):
+            file_id = attachment.file_id
+            preferred_name = attachment.file_name or "upload.bin"
+        else:
+            file_id = str(attachment.get("file_id") or "").strip()
+            preferred_name = str(attachment.get("file_name") or "upload.bin")
+        if not file_id:
+            return self._fail("telegram: attachment missing file_id")
+        token = self._resolve_secret(self.config.get("token_secret"))
+        if not token:
+            return self._fail("telegram: no token for download")
+        meta = self._get_json(
+            f"{TELEGRAM_API}/bot{token}/getFile", {"file_id": file_id}
+        )
+        if not meta or not meta.get("ok"):
+            return self._fail(
+                f"telegram: getFile failed ({(meta or {}).get('description') or 'no response'})"
+            )
+        result = meta.get("result") or {}
+        remote_path = str(result.get("file_path") or "").strip()
+        if not remote_path:
+            return self._fail("telegram: getFile returned no file_path")
+        size = int(result.get("file_size") or 0)
+        if size and size > _TG_DOWNLOAD_MAX:
+            return self._fail(
+                f"telegram: file too large ({size} bytes, max {_TG_DOWNLOAD_MAX})"
+            )
+        file_url = f"{TELEGRAM_API}/file/bot{token}/{remote_path}"
+        dest_path = Path(dest)
+        # If dest is a directory, place the file under a safe name.
+        if dest_path.exists() and dest_path.is_dir():
+            name = Path(remote_path).name or preferred_name or "upload.bin"
+            dest_path = dest_path / name
+        dest_path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            import httpx
+
+            resp = httpx.get(
+                file_url,
+                timeout=httpx.Timeout(120.0, connect=10.0),
+                follow_redirects=True,
+            )
+            status = int(resp.status_code)
+            if not 200 <= status < 300:
+                return self._fail(f"telegram: file download HTTP {status}")
+            blob = bytes(resp.content or b"")
+            if not blob:
+                return self._fail("telegram: empty file download")
+            if len(blob) > _TG_DOWNLOAD_MAX:
+                return self._fail(
+                    f"telegram: downloaded file too large ({len(blob)} bytes)"
+                )
+            dest_path.write_bytes(blob)
+            return {
+                "ok": True,
+                "path": str(dest_path),
+                "detail": f"saved {len(blob)} bytes",
+                "bytes": len(blob),
+            }
+        except Exception as exc:  # noqa: BLE001 — never break the inbound loop
+            return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
 
 
 class MockChannel(Channel):
