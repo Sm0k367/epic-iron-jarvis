@@ -83,9 +83,11 @@ class CommandInterpreter:
             runs = list(db.exec(select(WorkflowRunRecord)))
         live = sum(1 for r in runs if r.status in ("running", "cancelling"))
         # No brand prefix here — inbound adds REPLY_PREFIX once.
+        lead = f"{cfg.default_provider}/{cfg.default_model}"
         return (
             f"v{__version__} online\n"
-            f"Model: {cfg.default_provider}/{cfg.default_model}\n"
+            f"Lead model: {lead}\n"
+            f"Mode: LIVE (real APIs — not mock)\n"
             f"Workflows: {live} running, {len(runs)} total\n"
             f"Sessions: {len(self.orch.list_sessions(limit=200))} recent\n"
             f"Bot: t.me/EpicTechAI_bot\n"

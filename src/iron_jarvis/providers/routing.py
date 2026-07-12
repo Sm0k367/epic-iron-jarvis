@@ -57,9 +57,8 @@ LATENCY = LatencyTracker()
 #: The three difficulty tiers, cheapest → most capable.
 TIERS = ("light", "standard", "heavy")
 
-#: Cost/capability rank by model-id SUBSTRING (checked longest-first). Lower =
-#: cheaper & lighter. Flat-rate subscription CLIs are treated as cheap (they cost
-#: nothing marginal), which makes them great default routing models.
+#: Cost/capability rank by model-id SUBSTRING. Lower = cheaper & lighter.
+#: Higher = more capable (Auto "heavy" tier). Epic lead: grok-4.5 is top rank.
 _RANK_RULES: tuple[tuple[str, int], ...] = (
     ("mock", 0),
     ("subscription", 1),      # claude-cli / codex-cli — flat-rate, $0 marginal
@@ -68,32 +67,47 @@ _RANK_RULES: tuple[tuple[str, int], ...] = (
     ("openrouter/auto", 1),
     ("sonnet", 2), ("gpt-4o", 2), ("gpt-4.1", 2), ("1.5-pro", 2),
     ("grok-build", 2), ("code", 2), ("medium", 2), ("13b", 2), ("mixtral", 2),
-    ("opus", 3), ("gpt-5", 3), ("grok-4", 3), ("ultra", 3), ("70b", 3),
-    ("large", 3), ("o1", 3), ("o3", 3),
+    ("opus", 3), ("gpt-5", 3), ("grok-4.3", 3), ("grok-4", 3), ("ultra", 3),
+    ("70b", 3), ("large", 3), ("o1", 3), ("o3", 3),
+    # Epic Tech AI flagship — highest capability rank so Auto heavy pins here.
+    ("grok-4.5", 4),
 )
 
 #: Rank for a model whose id matches none of the rules — assume mid-tier.
 _DEFAULT_RANK = 2
 
+#: Cheap-tier tokens: when present, rank is the MIN of these (mini beats gpt-4o).
+_CHEAP_TOKENS = frozenset({
+    "mock", "subscription", "mini", "nano", "flash", "haiku", "fable",
+    "fast", "lite", "small", "8b", "7b", "openrouter/auto",
+})
+
 #: Tie-break preference among equally-cheap models for the SUGGESTED routing
-#: model: a flat-rate CLI or a local model first, then metered minis.
+#: model. Epic: prefer xAI when ranks tie, then other live providers.
 _SUGGEST_PREFERENCE = (
-    "claude-cli", "codex-cli", "ollama", "custom", "openrouter",
-    "google", "openai", "anthropic", "xai",
+    "xai", "groq", "openrouter", "google", "openai", "anthropic",
+    "claude-cli", "codex-cli", "grok-cli", "ollama", "custom",
 )
 
 
 def model_rank(provider: str, model: str) -> int:
     """Cost/capability rank of a ``(provider, model)`` — lower is cheaper/lighter.
 
-    A model that advertises a CHEAP tier suffix (mini / nano / flash / fast /
-    haiku / lite …) is cheap regardless of its base family, so we take the MINIMUM
-    rank among every matched token: "gpt-4o-mini" matches both "gpt-4o" (2) and
-    "mini" (1) → 1, while a bare "gpt-4o" stays 2.
+    Cheap suffixes (mini / nano / flash / fast / …) win via MIN rank so
+    ``gpt-4o-mini`` is 1. Otherwise the LONGEST matching token wins so
+    ``grok-4.5`` (rank 4) beats the shorter ``grok-4`` (rank 3).
     """
     hay = f"{provider} {model}".lower()
-    matched = [rank for token, rank in _RANK_RULES if token in hay]
-    return min(matched) if matched else _DEFAULT_RANK
+    matched = [(token, rank) for token, rank in _RANK_RULES if token in hay]
+    if not matched:
+        return _DEFAULT_RANK
+    cheap = [r for t, r in matched if t in _CHEAP_TOKENS]
+    if cheap:
+        return min(cheap)
+    # Specificity: longest model-id token (grok-4.5 > grok-4).
+    best_len = max(len(t) for t, _ in matched)
+    at_len = [r for t, r in matched if len(t) == best_len]
+    return max(at_len)
 
 
 def _pm(entry: Any) -> "tuple[str, str] | None":

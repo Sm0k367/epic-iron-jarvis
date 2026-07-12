@@ -975,7 +975,7 @@ def create_app(project_root: str | None = None) -> FastAPI:
         "anthropic": "claude-opus-4-8",
         "openai": "gpt-4o-mini",
         "google": "gemini-1.5-flash",
-        "xai": "grok-4-1-fast",
+        "xai": "grok-4.5",
         "openrouter": "openrouter/auto",
     }
 

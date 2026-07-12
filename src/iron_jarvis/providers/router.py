@@ -86,15 +86,23 @@ _TRANSIENT_PHRASE_RE = re.compile(
 )
 
 #: Failover candidate order when the wanted provider is down/rate-limited.
-#: SUBSCRIPTION ARBITRAGE: the flat-rate CLI providers (claude-cli / codex-cli /
-#: grok-cli — a logged-in local CLI, $0 marginal cost) are tried BEFORE the
-#: metered APIs, so rate-limit spillover lands on plans you already pay for. This
-#: mirrors ``ProviderManager._AUTO_DEFAULT_ORDER`` exactly so the auto-default
-#: pick and the failover order can never disagree. (The capability filter still
-#: excludes text-only codex-cli / grok when a request carries tools.)
+#: Epic Tech AI lead: **xAI Grok 4.5** first (SOTA primary). Everything else is
+#: a subordinate backup so work still finishes when the lead is rate-limited or
+#: offline — CLIs / other APIs / local, never silent mock while a real model
+#: exists. Capability filters still drop text-only CLIs when tools are required.
+#: Keep in sync with ``ProviderManager._AUTO_DEFAULT_ORDER``.
 _FAILOVER_ORDER = (
-    "claude-cli", "codex-cli", "grok-cli",
-    "anthropic", "openai", "google", "xai", "openrouter", "ollama", "custom",
+    "xai",
+    "groq",
+    "anthropic",
+    "openai",
+    "google",
+    "openrouter",
+    "claude-cli",
+    "codex-cli",
+    "grok-cli",
+    "ollama",
+    "custom",
 )
 
 
@@ -300,6 +308,12 @@ class ModelRouter:
 
         wanted = provider or self.default_provider
         if wanted != "mock" and not self.manager.available(wanted):
+            # Never fabricate mock output while ANY real model is connected —
+            # fail over to the strongest available backup (xAI lead order).
+            fp = self._first_available_real()
+            if fp is not None:
+                self._resolve_reason = "failover-unavailable"
+                return self.manager.get(fp), fp, False
             return self.manager.get("mock"), wanted, True
         return self.manager.get(wanted, model), wanted, False
 

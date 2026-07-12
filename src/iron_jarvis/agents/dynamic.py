@@ -31,7 +31,15 @@ if TYPE_CHECKING:  # avoid importing the heavy SQLAlchemy symbol at runtime
 #: Offline-safe: the ``mock`` provider drives the deterministic test LLM; the
 #: rest are the live providers the platform can route to when keys are present.
 KNOWN_MODELS: list[dict] = [
-    {"provider": "mock", "model": "mock-1"},
+    # --- Epic Tech AI LEAD (Grok 4.5) + xAI family ---
+    {"provider": "xai", "model": "grok-4.5"},
+    {"provider": "xai", "model": "grok-4.3"},
+    {"provider": "xai", "model": "grok-4"},
+    {"provider": "xai", "model": "grok-4-1-fast"},
+    {"provider": "xai", "model": "grok-code-fast-1"},
+    {"provider": "xai", "model": "grok-build-0.1"},
+    # --- Subordinate live providers (failover / specialized) ---
+    {"provider": "groq", "model": "llama-3.3-70b-versatile"},
     {"provider": "anthropic", "model": "claude-opus-4-8"},
     {"provider": "anthropic", "model": "claude-sonnet-4-6"},
     {"provider": "anthropic", "model": "claude-haiku-4-5"},
@@ -49,15 +57,11 @@ KNOWN_MODELS: list[dict] = [
     {"provider": "codex-cli", "model": "subscription"},
     {"provider": "google", "model": "gemini-2.0-flash"},
     {"provider": "google", "model": "gemini-1.5-pro"},
-    # xAI (Grok) — current generation: the flagship, the fast agentic model,
-    # and the two coding-agent models (grok-build-0.1 powers the Grok Build CLI).
-    {"provider": "xai", "model": "grok-4"},
-    {"provider": "xai", "model": "grok-4-1-fast"},
-    {"provider": "xai", "model": "grok-code-fast-1"},
-    {"provider": "xai", "model": "grok-build-0.1"},
     # OpenRouter — namespaced ids; openrouter/auto picks the best model per task.
     {"provider": "openrouter", "model": "openrouter/auto"},
     {"provider": "openrouter", "model": "x-ai/grok-code-fast-1"},
+    # Offline test-only stub (never the product default for Epic Tech AI).
+    {"provider": "mock", "model": "mock-1"},
 ]
 
 

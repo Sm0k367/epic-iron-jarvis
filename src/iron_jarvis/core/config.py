@@ -453,9 +453,11 @@ def write_default_config(project_root: str | Path) -> Path:
     home.mkdir(parents=True, exist_ok=True)
     path = home / "config.toml"
     if not path.exists():
+        # Epic Tech AI: lead with live xAI Grok 4.5 (never offline mock as the
+        # product default). Mock remains registered for tests / air-gap only.
         doc = {
-            "default_provider": "mock",
-            "default_model": "claude-opus-4-8",
+            "default_provider": "xai",
+            "default_model": "grok-4.5",
             "max_agent_steps": 12,
             "permissions": default_permissions(),
             "sandbox": default_sandbox_policy(),

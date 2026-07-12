@@ -132,7 +132,7 @@ class ProviderManager:
         self.register(
             "xai",
             lambda model=None: OpenAIAdapter(
-                model=model or "grok-2-latest",
+                model=model or "grok-4.5",
                 base_url=XAI_ENDPOINT,
                 credential=lambda: self._cred("xai"),
                 provider_name="xai",
@@ -363,13 +363,20 @@ class ProviderManager:
 
     #: When Auto routing is the default, a ONE-SHOT utility caller (skill apply,
     #: terminal assist, intake, …) may ask for the "auto" pseudo-provider without
-    #: a request to classify. Resolve it to the cheapest available REAL provider
-    #: (flat-rate CLIs / local first), so those callers just work instead of
-    #: KeyError-ing. The router's per-request auto path is unaffected — it never
-    #: calls get("auto").
+    #: a request to classify. Epic lead = xAI Grok; other providers are backups
+    #: so the call still completes. Keep in sync with router ``_FAILOVER_ORDER``.
     _AUTO_DEFAULT_ORDER = (
-        "claude-cli", "codex-cli", "ollama", "custom", "openrouter",
-        "google", "openai", "anthropic", "xai",
+        "xai",
+        "groq",
+        "anthropic",
+        "openai",
+        "google",
+        "openrouter",
+        "claude-cli",
+        "codex-cli",
+        "grok-cli",
+        "ollama",
+        "custom",
     )
 
     def _auto_concrete_default(self) -> tuple[str, "str | None"]:
