@@ -157,11 +157,17 @@ Never put real keys in README, issues, or committed files.
 
 ---
 
-## 📱 Telegram & phone commands
+## 📱 Telegram bot
 
-**Dashboard → Channels** — add Telegram bot token + chat id + **allowed senders** (fail-closed allowlist). Enable inbound.
+| | Recommended |
+|--|-------------|
+| **Display name** | **Epic Tech AI** |
+| **Username** | **`@EpicTechAI_bot`** (or next free `*bot` name on Telegram) |
+| **Replies** | Prefixed `Epic Tech AI: ` |
 
-Reflex command grammar (deterministic, no full agent unless free text):
+**Full setup:** [`docs/TELEGRAM.md`](docs/TELEGRAM.md) (BotFather → Channels → allowlist).
+
+**Dashboard → Channels** — type `telegram`, bot token, chat id, **Enable two-way = true**, **Allowlist = your user id**.
 
 | Command | Action |
 |---------|--------|
@@ -175,7 +181,7 @@ Reflex command grammar (deterministic, no full agent unless free text):
 | `/usage` | Token usage summary |
 | *(free text)* | Supervised agent session |
 
-Details: [`docs/REFLEX.md`](docs/REFLEX.md).
+Also: [`docs/REFLEX.md`](docs/REFLEX.md).
 
 ---
 
