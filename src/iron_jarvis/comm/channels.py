@@ -10,12 +10,20 @@ touched in tests. Missing token / url / chat-id yields ``ok=False`` with a clear
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from ..core.logging import get_logger
 from .base import Channel, InboundMessage
 
 _log = get_logger("comm")
+
+#: Telegram Bot API media limits (bytes) — stay under documented caps.
+_TG_PHOTO_MAX = 10 * 1024 * 1024
+_TG_DOC_MAX = 50 * 1024 * 1024
+_TG_PHOTO_EXTS = frozenset({".jpg", ".jpeg", ".png", ".gif", ".webp"})
+_TG_VIDEO_EXTS = frozenset({".mp4", ".webm", ".mov"})
+_TG_AUDIO_EXTS = frozenset({".mp3", ".wav", ".ogg", ".m4a"})
 
 SLACK_POST_MESSAGE_URL = "https://slack.com/api/chat.postMessage"
 TELEGRAM_API = "https://api.telegram.org"
@@ -103,6 +111,85 @@ class TelegramChannel(Channel):
             payload["parse_mode"] = parse_mode
         return self._post(url, payload)
 
+    def send_media(
+        self,
+        path: str | Path,
+        *,
+        chat_id: Any = None,
+        caption: str = "",
+        kind: str | None = None,
+    ) -> dict[str, Any]:
+        """Upload a local file via sendPhoto / sendVideo / sendAudio / sendDocument.
+
+        Uses multipart form (not the JSON http_post path). Caps size to Telegram
+        limits. ``kind`` auto-detected from extension when omitted.
+        """
+        token_secret = self.config.get("token_secret")
+        token = self._resolve_secret(token_secret)
+        if not token:
+            return self._fail("telegram: no token for media")
+        cid = chat_id if chat_id is not None else self.config.get("chat_id")
+        if not cid:
+            return self._fail("telegram: no chat_id for media")
+        p = Path(path)
+        if not p.is_file():
+            return self._fail(f"telegram: media not found: {p}")
+        try:
+            size = p.stat().st_size
+        except OSError as exc:
+            return self._fail(f"telegram: cannot stat media: {exc}")
+        ext = p.suffix.lower()
+        mode = (kind or "").lower().strip()
+        if not mode:
+            if ext in _TG_PHOTO_EXTS:
+                mode = "photo"
+            elif ext in _TG_VIDEO_EXTS:
+                mode = "video"
+            elif ext in _TG_AUDIO_EXTS:
+                mode = "audio"
+            else:
+                mode = "document"
+        max_bytes = _TG_PHOTO_MAX if mode == "photo" else _TG_DOC_MAX
+        if size > max_bytes:
+            return self._fail(
+                f"telegram: {p.name} is {size} bytes (max {max_bytes} for {mode})"
+            )
+        method = {
+            "photo": "sendPhoto",
+            "video": "sendVideo",
+            "audio": "sendAudio",
+            "document": "sendDocument",
+        }.get(mode, "sendDocument")
+        field = {
+            "photo": "photo",
+            "video": "video",
+            "audio": "audio",
+            "document": "document",
+        }.get(mode, "document")
+        url = f"{TELEGRAM_API}/bot{token}/{method}"
+        data = {"chat_id": str(cid)}
+        cap = (caption or "").strip()
+        if cap:
+            data["caption"] = cap[:1024]
+        try:
+            import httpx
+
+            with p.open("rb") as fh:
+                files = {field: (p.name, fh)}
+                resp = httpx.post(
+                    url,
+                    data=data,
+                    files=files,
+                    timeout=httpx.Timeout(120.0, connect=10.0),
+                )
+            ok = 200 <= int(resp.status_code) < 300
+            detail = f"HTTP {resp.status_code}"
+            if not ok:
+                detail = f"HTTP {resp.status_code}: {(resp.text or '')[:200]}"
+            return {"ok": ok, "detail": detail, "method": method, "path": str(p)}
+        except Exception as exc:  # noqa: BLE001 — never break the inbound loop
+            return {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
+
     def typing(self, chat_id: Any = None) -> dict[str, Any]:
         """Show the Telegram 'typing…' indicator (lasts ~5s on the client)."""
         token_secret = self.config.get("token_secret")
@@ -169,10 +256,19 @@ class MockChannel(Channel):
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self.sent: list[str] = []
+        self.media: list[dict[str, Any]] = []
 
     def send(self, message: str, **kw: Any) -> dict[str, Any]:
         self.sent.append(message)
         return {"ok": True, "detail": f"recorded ({len(self.sent)})"}
+
+    def send_media(
+        self, path: str | Path, *, chat_id: Any = None, caption: str = "", kind: str | None = None
+    ) -> dict[str, Any]:
+        self.media.append(
+            {"path": str(path), "chat_id": chat_id, "caption": caption, "kind": kind}
+        )
+        return {"ok": True, "detail": f"media-recorded ({len(self.media)})"}
 
 
 class ConsoleChannel(Channel):

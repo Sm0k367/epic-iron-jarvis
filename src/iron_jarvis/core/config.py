@@ -46,7 +46,11 @@ def default_permissions() -> dict[str, str]:
         "skill_search": "allow",
         "skill_load": "allow",
         "delegate": "ask",
-        "web_search": "ask",
+        # Live product (Telegram + dashboard): search + creative must work
+        # headless when keys are in the vault. shell / browser stay fail-closed.
+        "web_search": "allow",
+        "pixio": "allow",
+        "images": "allow",
         "browser_use": "deny",  # computer-control capability — never default-allow
         "mcp_call": "ask",
         "create_document": "deny",  # superseded by write_document — fail-closed

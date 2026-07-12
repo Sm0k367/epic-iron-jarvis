@@ -33,7 +33,12 @@ _HELP = (
     "/buy [product_id] — credit packs / Stripe checkout\n"
     "/usage — token usage summary\n"
     "/help — this list\n"
-    "Any other message runs as a normal request.\n"
+    "\n"
+    "Plain English does everything else:\n"
+    "• chat, code, files, memory, docs, web search\n"
+    "• generate images/video/audio (Pixio) — files attach here\n"
+    "• workflows & tools on this machine\n"
+    "Lead model: xAI Grok 4.5 (live, not mock)\n"
     "Contact: epictechai@gmail.com · x.com/EpicTechAI"
 )
 

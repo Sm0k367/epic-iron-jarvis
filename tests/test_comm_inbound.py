@@ -49,12 +49,12 @@ class FakeTelegram:
             self.updates = [u for u in self.updates if u["update_id"] >= offset]
         return {"ok": True, "result": list(self.updates)}
 
-    # POST sendMessage / sendChatAction
+    # POST sendMessage / sendChatAction (media uses multipart httpx — not this path)
     def post(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
         if "sendChatAction" in url:
             self.sent.append({"_action": payload.get("action"), **payload})
             return {"status_code": 200, "ok": True}
-        assert "sendMessage" in url
+        assert "sendMessage" in url or "sendPhoto" in url or "sendDocument" in url
         self.sent.append(payload)
         return {"status_code": 200}
 

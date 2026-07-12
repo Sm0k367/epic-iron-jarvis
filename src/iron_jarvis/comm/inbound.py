@@ -28,6 +28,7 @@ blocks boot, and is cancelled on shutdown.
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import Engine
@@ -41,6 +42,15 @@ from .base import Channel, InboundMessage
 from .models import InboundOffsetRecord
 
 log = get_logger("comm.inbound")
+
+#: Media extensions the Telegram bot will auto-attach after a free-text session.
+_MEDIA_EXTS = frozenset({
+    ".png", ".jpg", ".jpeg", ".gif", ".webp",
+    ".mp4", ".webm", ".mov",
+    ".mp3", ".wav", ".ogg", ".m4a",
+})
+#: Cap how many files we push per reply (Telegram UX + rate limits).
+_MAX_MEDIA_PER_REPLY = 6
 
 
 class InboundPoller:
@@ -252,17 +262,27 @@ class InboundPoller:
             ch.send, self._format_reply("Working on it…"), chat_id=chat_id
         )
 
-        # Conversational free-text: BUILDER + default cloud/local model, with a
-        # brand-aware prompt so "who are you?" is answered as Epic Tech AI.
+        # Full-capability free-text: BUILDER + lead model (Grok 4.5) with tools —
+        # code, memory, docs, web, and Pixio media generation. Media files left in
+        # the session workspace are attached on the reply after the summary.
         cfg = getattr(getattr(self.orchestrator, "p", None), "config", None)
         provider = getattr(cfg, "default_provider", None) if cfg else None
         model = getattr(cfg, "default_model", None) if cfg else None
         task = (
-            "You are Epic Tech AI — a local-first AI operating system assistant "
-            "on the user's machine (brand: Epic Tech AI, contact epictechai@gmail.com, "
-            "X @EpicTechAI). You are NOT Iron Jarvis. "
-            "Answer the user's message directly in a short, clear Telegram reply. "
-            "Do not invent tool results. If you only need to talk, just talk.\n\n"
+            "You are Epic Tech AI — the user's local AI operating system on this "
+            "machine (brand: Epic Tech AI · epictechai@gmail.com · X @EpicTechAI). "
+            "You are NOT Iron Jarvis.\n"
+            "Channel: Telegram. Reply in clear, concise plain text suitable for mobile.\n"
+            "FULL CAPABILITY — use tools when they help:\n"
+            "- Talk, plan, code, edit files in the workspace, search memory/LTM\n"
+            "- Read/write documents; create workflows/schedules when asked\n"
+            "- Web search when facts need a live lookup\n"
+            "- MEDIA: when the user wants an image, video, audio, or visual, use "
+            "pixio_models → pixio_params → pixio_generate (pixio_status if needed). "
+            "Save outputs under pixio/ in the workspace; the system will attach "
+            "those files to Telegram automatically.\n"
+            "Do not invent tool results. If you only need to talk, just talk.\n"
+            "Finish with a short plain-language summary of what you did.\n\n"
             f"User message:\n{text}"
         )
         session = await self.orchestrator.create_session(
@@ -297,20 +317,61 @@ class InboundPoller:
         if reply.startswith("Delegated the task") or "all subtasks complete" in reply:
             reply = (
                 "I'm Epic Tech AI — your local AI OS assistant. "
-                "I can run tasks, workflows, and tools on this machine. "
+                "I can run tasks, workflows, tools, and generate media on this machine. "
                 "Ask me anything, or try /help for commands."
             )
         body = self._format_reply(reply)
         # Safe to reply to the originating chat: we only reach here for the
         # sender's own private chat (the non-private guard above refused groups).
         send_res = await asyncio.to_thread(ch.send, body, chat_id=chat_id)
+        media_sent = 0
+        media_paths = self._collect_session_media(getattr(session, "workspace_path", "") or "")
+        send_media = getattr(ch, "send_media", None)
+        if callable(send_media) and media_paths:
+            await asyncio.to_thread(ch.typing, chat_id)
+            for i, mpath in enumerate(media_paths):
+                cap = mpath.name if i == 0 else ""
+                try:
+                    mres = await asyncio.to_thread(
+                        send_media, mpath, chat_id=chat_id, caption=cap
+                    )
+                    if mres and mres.get("ok"):
+                        media_sent += 1
+                except Exception:  # noqa: BLE001 — media must not kill the text reply
+                    log.exception("failed to send media %s", mpath)
         return {
             "channel": name,
             "status": "handled",
             "session_id": session.id,
             "sent": bool(send_res.get("ok")),
             "detail": send_res.get("detail"),
+            "media_sent": media_sent,
         }
+
+    @staticmethod
+    def _collect_session_media(workspace: str) -> list[Path]:
+        """Newest media files under a session workspace (pixio/ + root), capped."""
+        root = Path(workspace or "")
+        if not root.is_dir():
+            return []
+        found: list[Path] = []
+        try:
+            for p in root.rglob("*"):
+                if not p.is_file():
+                    continue
+                if p.suffix.lower() not in _MEDIA_EXTS:
+                    continue
+                # Skip huge accidental dumps
+                try:
+                    if p.stat().st_size <= 0 or p.stat().st_size > 50 * 1024 * 1024:
+                        continue
+                except OSError:
+                    continue
+                found.append(p)
+        except OSError:
+            return []
+        found.sort(key=lambda x: x.stat().st_mtime, reverse=True)
+        return found[:_MAX_MEDIA_PER_REPLY]
 
     def _format_reply(self, reply: str) -> str:
         """Always produce a non-empty Telegram message body."""

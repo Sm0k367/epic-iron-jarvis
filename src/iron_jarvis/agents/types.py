@@ -58,19 +58,36 @@ _COLLAB_TOOLS = ["blackboard_post", "blackboard_read", "message_agent"]
 # at authoring time. Execution is still gated by the ``mcp_call`` permission
 # (ask by default; a per-server auto_approve or chat-arming grants it).
 _EXTERNAL_TOOLS = ["mcp:*"]
+# Creative media (Pixio) + local image ops — Telegram + dashboard can generate
+# and ship images/video/audio when the vault has a Pixio key.
+_CREATIVE_TOOLS = [
+    "pixio_models",
+    "pixio_params",
+    "pixio_generate",
+    "pixio_status",
+    "pixio_upload",
+    "view_image",
+    "image_convert",
+    "image_resize",
+    "image_info",
+]
+# Live web lookup (vault/env key when required).
+_WEB_TOOLS = ["web_search"]
 
 # A warm, human voice shared across agents. Accumulated lessons are appended to
 # this prompt at runtime (see LearningEngine.apply_to_prompt), so it improves
 # every time the user interacts.
 _VOICE = (
-    "You are Iron Jarvis — a sharp, friendly teammate, not a faceless bot. Talk "
-    "like a trusted colleague: warm, concise, plain-spoken, and proactive. You "
-    "can read and write real documents (PDF, Word, Excel, PowerPoint, CSV, "
-    "Markdown, text) as naturally as a person. Narrate briefly what you're doing "
-    "and why; if something is ambiguous, make a sensible assumption and say so. "
-    "When you notice how the user likes things done, call `remember_preference` "
-    "so you do it that way next time. Finish with a friendly, plain-language "
-    "summary — no further tool calls."
+    "You are Epic Tech AI — a sharp, friendly teammate, not a faceless bot "
+    "(brand: Epic Tech AI · epictechai@gmail.com · @EpicTechAI). Talk like a "
+    "trusted colleague: warm, concise, plain-spoken, and proactive. You can "
+    "read and write real documents (PDF, Word, Excel, PowerPoint, CSV, "
+    "Markdown, text), search the web when useful, and generate images/video/"
+    "audio via pixio_* tools when the user asks for media. Narrate briefly what "
+    "you're doing and why; if something is ambiguous, make a sensible assumption "
+    "and say so. When you notice how the user likes things done, call "
+    "`remember_preference` so you do it that way next time. Finish with a "
+    "friendly, plain-language summary — no further tool calls."
 )
 
 
@@ -87,11 +104,15 @@ _DEFINITIONS: dict[AgentType, AgentDefinition] = {
         type=AgentType.BUILDER,
         system_prompt=(
             _VOICE + " As the Builder, you roll up your sleeves and get the task "
-            "done inside your workspace — one concrete action at a time."
+            "done inside your workspace — one concrete action at a time. When the "
+            "user wants media, call pixio_models → pixio_params → pixio_generate "
+            "(then pixio_status if needed) and leave files under pixio/ in the "
+            "workspace so Telegram/dashboard can deliver them."
         ),
         tools=(
             _FILE_TOOLS + ["shell"] + _KNOWLEDGE_TOOLS + _SELF_SERVICE_TOOLS
             + _DOCUMENT_TOOLS + _LEARNING_TOOLS + _COLLAB_TOOLS + _EXTERNAL_TOOLS
+            + _CREATIVE_TOOLS + _WEB_TOOLS
         ),
     ),
     AgentType.PLANNER: AgentDefinition(
