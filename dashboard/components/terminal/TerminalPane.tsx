@@ -100,7 +100,8 @@ export function TerminalPane({
   const wsRef = useRef<WebSocket | null>(null);
 
   // --- Per-pane AI: Assist (fast suggest) or Agent (full BUILDER tools) ---
-  const [aiOpen, setAiOpen] = useState(false);
+  // Open by default so users don't type "hi" into PowerShell by mistake.
+  const [aiOpen, setAiOpen] = useState(true);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
@@ -504,7 +505,7 @@ export function TerminalPane({
             e.stopPropagation();
             setAiOpen((v) => !v);
           }}
-          title="Ask AI about this terminal"
+          title="AI chat (Agent/Assist) — not the PowerShell prompt"
           className={`grid h-5 w-5 shrink-0 place-items-center rounded-md transition-colors ${
             aiOpen
               ? "bg-accent/15 text-accent"
@@ -810,6 +811,24 @@ export function TerminalPane({
               </div>
             </div>
           )}
+        </div>
+      )}
+
+      {!aiOpen && (
+        <div className="shrink-0 border-b border-amber-500/20 bg-amber-500/[0.06] px-3 py-1 text-[10px] leading-snug text-amber-100/80">
+          Shell = PowerShell commands only. Chat with AI via the{" "}
+          <button
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              setAiOpen(true);
+            }}
+            className="font-semibold text-accent-soft underline-offset-2 hover:underline"
+          >
+            ✨ AI bar
+          </button>{" "}
+          (Agent mode is fully capable). Typing <code className="text-amber-200">hi</code> in
+          the shell will error.
         </div>
       )}
 
