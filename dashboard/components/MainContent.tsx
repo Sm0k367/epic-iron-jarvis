@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { AppFooter } from "@/components/AppFooter";
 
 /**
  * The page-content wrapper. Every module shares the Build workspace's outer
@@ -15,6 +16,7 @@ export function MainContent({ children }: { children: ReactNode }) {
       className="w-full max-w-none px-3 py-4 outline-none lg:px-4"
     >
       {children}
+      <AppFooter />
     </div>
   );
 }

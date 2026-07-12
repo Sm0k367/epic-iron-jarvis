@@ -22,6 +22,7 @@ import {
   KeyRound,
   ShieldCheck,
   BookOpen,
+  Scale,
   type LucideIcon,
 } from "lucide-react";
 import { Card } from "@/components/ui";
@@ -381,6 +382,57 @@ export default function HelpPage() {
               </div>
             ))}
           </dl>
+        </Card>
+      </Reveal>
+
+      {/* Legal & contact */}
+      <Reveal>
+        <Card title="Legal, privacy & contact" icon={<Scale size={15} />}>
+          <p className="text-[13px] leading-relaxed text-zinc-400">
+            Epic Tech AI publishes full whitepages for privacy, terms, acceptable use, billing,
+            cookies, security, copyright, and a product whitepaper. Open the Legal hub or jump
+            straight to a policy.
+          </p>
+          <div className="mt-4 flex flex-wrap gap-2">
+            {(
+              [
+                ["/legal", "Legal hub"],
+                ["/legal/privacy", "Privacy"],
+                ["/legal/terms", "Terms"],
+                ["/legal/billing", "Billing"],
+                ["/legal/security", "Security"],
+                ["/legal/whitepaper", "Whitepaper"],
+                ["/legal/contact", "Contact"],
+              ] as const
+            ).map(([href, label]) => (
+              <Link
+                key={href}
+                href={href}
+                className="rounded-full border border-white/10 bg-white/[0.03] px-3 py-1.5 text-[12px] font-medium text-zinc-300 hover:border-accent/30 hover:text-accent-soft"
+              >
+                {label}
+              </Link>
+            ))}
+          </div>
+          <p className="mt-4 text-[13px] text-zinc-500">
+            Email{" "}
+            <a
+              href="mailto:epictechai@gmail.com"
+              className="text-accent-soft hover:text-accent"
+            >
+              epictechai@gmail.com
+            </a>
+            {" · "}
+            <a
+              href="https://x.com/EpicTechAI"
+              target="_blank"
+              rel="noreferrer"
+              className="text-accent-soft hover:text-accent"
+            >
+              @EpicTechAI
+            </a>
+            . Never paste API keys into public issues — see Legal → Security and Secrets.
+          </p>
         </Card>
       </Reveal>
     </PageShell>

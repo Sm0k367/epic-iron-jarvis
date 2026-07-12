@@ -39,6 +39,9 @@ import {
   DownloadCloud,
   Settings,
   LifeBuoy,
+  Scale,
+  Shield,
+  FileText,
   type LucideIcon,
 } from "lucide-react";
 
@@ -93,6 +96,9 @@ const COMMANDS: Command[] = [
   { id: "usage", label: "Usage", hint: "System", icon: BarChart3, href: "/usage", keywords: "tokens cost spend analytics" },
   { id: "updates", label: "Updates", hint: "System", icon: DownloadCloud, href: "/updates", keywords: "version upgrade release" },
   { id: "settings", label: "Settings", hint: "System", icon: Settings, href: "/settings", keywords: "config preferences" },
+  { id: "legal", label: "Legal hub", hint: "System", icon: Scale, href: "/legal", keywords: "privacy terms policy license aup billing cookies whitepaper" },
+  { id: "privacy", label: "Privacy Policy", hint: "Legal", icon: Shield, href: "/legal/privacy", keywords: "gdpr data personal" },
+  { id: "terms", label: "Terms of Service", hint: "Legal", icon: FileText, href: "/legal/terms", keywords: "tos agreement license" },
   { id: "help", label: "Help", hint: "System", icon: LifeBuoy, href: "/help", keywords: "docs support guide" },
 ];
 

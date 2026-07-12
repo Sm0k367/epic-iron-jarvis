@@ -28,7 +28,7 @@ import { useDaemon } from "@/lib/daemon";
 
 type FieldType = "text" | "number" | "boolean" | "select";
 type Value = string | number | boolean;
-type SectionId = "models" | "local" | "automation" | "advanced";
+type SectionId = "models" | "local" | "budgets" | "commerce" | "automation" | "advanced";
 
 interface FieldDef {
   key: string;
@@ -56,7 +56,7 @@ const SECTIONS: SectionDef[] = [
     id: "models",
     title: "Models & routing",
     description:
-      "Which AI answers by default, and how much history Iron Jarvis keeps. Add providers and API keys on the Connections page.",
+      "Which AI answers by default, and how much history Epic Tech AI keeps. Add providers and API keys on the Connections page (never hardcode keys).",
   },
   {
     id: "local",
@@ -65,10 +65,22 @@ const SECTIONS: SectionDef[] = [
       "Run against a local Ollama server or any OpenAI-compatible endpoint. Leave blank to turn these off.",
   },
   {
+    id: "budgets",
+    title: "Token budgets",
+    description:
+      "Hard caps on spend and volume. 0 means unlimited. Cloud runs only — mock/Ollama stay free.",
+  },
+  {
+    id: "commerce",
+    title: "Credits & billing",
+    description:
+      "Optional microtransactions. Stripe keys live in env/vault only — never paste secrets here. See Legal → Billing.",
+  },
+  {
     id: "automation",
     title: "Automation & autonomy",
     description:
-      "Advanced, and off by default. Lets Iron Jarvis act on your standing goals — always within the caps you set here. Manage goals on the Autonomy page.",
+      "Advanced, and off by default. Lets Epic Tech AI act on your standing goals — always within the caps you set here.",
   },
   {
     id: "advanced",
@@ -141,6 +153,73 @@ const FIELDS: FieldDef[] = [
     section: "local",
     placeholder: "qwen3-coder",
     hint: "Default model id for that custom endpoint.",
+  },
+
+  // --- Token budgets (Epic Tech AI) ---------------------------------------
+  {
+    key: "max_tokens_per_run",
+    label: "Max tokens per run",
+    type: "number",
+    section: "budgets",
+    hint: "0 = unlimited. Caps in+out tokens for a single session (when enforced).",
+  },
+  {
+    key: "max_tokens_per_day",
+    label: "Max tokens per day",
+    type: "number",
+    section: "budgets",
+    hint: "0 = unlimited. Rolling 24h token cap from usage meters.",
+  },
+  {
+    key: "max_usd_per_day",
+    label: "Max USD per day (est.)",
+    type: "number",
+    section: "budgets",
+    hint: "0 = unlimited. Estimated $ from provider token rates.",
+  },
+  {
+    key: "max_runs_per_hour",
+    label: "Max runs per hour",
+    type: "number",
+    section: "budgets",
+    hint: "0 = unlimited. Caps how many sessions can start per hour.",
+  },
+  {
+    key: "prefer_local_when_capable",
+    label: "Prefer local Ollama when capable",
+    type: "boolean",
+    section: "budgets",
+    hint: "Route easier tasks to local models when quality bar is met.",
+  },
+
+  // --- Commerce -----------------------------------------------------------
+  {
+    key: "billing_enabled",
+    label: "Billing enabled",
+    type: "boolean",
+    section: "commerce",
+    hint: "Master switch for credits ledger metering. Secrets stay in vault/env.",
+  },
+  {
+    key: "billing_require_credits",
+    label: "Require credits for cloud runs",
+    type: "boolean",
+    section: "commerce",
+    hint: "When on, cloud providers need min balance. Mock/Ollama stay free.",
+  },
+  {
+    key: "billing_min_credits",
+    label: "Minimum credits to start",
+    type: "number",
+    section: "commerce",
+    hint: "Used when require credits is on.",
+  },
+  {
+    key: "marketplace_enabled",
+    label: "Skill marketplace commerce",
+    type: "boolean",
+    section: "commerce",
+    hint: "Optional micro-purchases flag (connector marketplace is separate).",
   },
 
   // --- Automation & autonomy ----------------------------------------------
