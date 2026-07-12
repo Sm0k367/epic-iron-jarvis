@@ -22,6 +22,7 @@ log = get_logger("reflex.commands")
 _HELP = (
     "Epic Tech AI commands:\n"
     "/status — version, model, live work\n"
+    "/whoami — your Telegram id (for allowlist)\n"
     "/workflows — list saved workflows\n"
     "/run <name> — start a workflow\n"
     "/runs — recent workflow runs\n"
@@ -34,7 +35,10 @@ _HELP = (
     "/usage — token usage summary\n"
     "/help — this list\n"
     "\n"
-    "Plain English does everything else:\n"
+    "ACCESS: allowlist only. Strangers cannot generate media or run tools.\n"
+    "Owner must add a Telegram user id to allowed_senders.\n"
+    "\n"
+    "Plain English (if authorized):\n"
     "• chat, code, files, memory, docs, web search\n"
     "• generate images/video/audio (Pixio) — files attach here\n"
     "• workflows & tools on this machine\n"
@@ -77,6 +81,41 @@ class CommandInterpreter:
     # -- commands ----------------------------------------------------------
     async def _cmd_help(self, _rest: str) -> str:
         return _HELP
+
+    async def _cmd_whoami(self, _rest: str) -> str:
+        """Show allowlist — only reachable after fail-closed auth on inbound."""
+        allow: list[str] = []
+        try:
+            comm = getattr(self.p.config, "comm", None) or {}
+            if not isinstance(comm, dict) and hasattr(comm, "model_dump"):
+                comm = comm.model_dump()
+            channels = (comm or {}).get("channels") or {}
+            if not isinstance(channels, dict):
+                channels = {}
+            # Prefer the epic channel; fall back to any telegram-typed entry.
+            raw = channels.get("epic") or {}
+            if not raw:
+                for _name, conf in channels.items():
+                    if isinstance(conf, dict) and conf.get("type") == "telegram":
+                        raw = conf
+                        break
+            allow = [str(x) for x in (raw.get("allowed_senders") or [])]
+        except Exception:  # noqa: BLE001
+            allow = []
+        if not allow:
+            return (
+                "Allowlist is empty — FAIL-CLOSED: nobody (including strangers "
+                "from X) can use tools or generate media until you set "
+                "allowed_senders."
+            )
+        return (
+            "This bot is PRIVATE (owner permission only).\n"
+            f"Allowlisted Telegram user ids ({len(allow)}):\n"
+            + "\n".join(f"• {a}" for a in allow)
+            + "\n\nOnly these ids can chat, run tools, or generate media.\n"
+            "To approve someone: add their Telegram user id to "
+            "comm.channels.epic.allowed_senders in config, then restart."
+        )
 
     async def _cmd_status(self, _rest: str) -> str:
         from .. import __version__

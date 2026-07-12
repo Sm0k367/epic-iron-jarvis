@@ -52,6 +52,21 @@ _MEDIA_EXTS = frozenset({
 #: Cap how many files we push per reply (Telegram UX + rate limits).
 _MAX_MEDIA_PER_REPLY = 6
 
+#: Public-facing denial when someone finds the bot (e.g. via X) without allowlist.
+_UNAUTHORIZED_REPLY = (
+    "Epic Tech AI is private and gated.\n"
+    "You need the owner's explicit permission before any chat, tools, or "
+    "media generation can run.\n\n"
+    "Request access: epictechai@gmail.com · X @EpicTechAI\n"
+    "Your Telegram user id is shown below — the owner must add it to the "
+    "allowlist before anything works.\n"
+    "Your id: {sender_id}"
+)
+
+#: Soft rate-limit for unauthorized denials (seconds per sender) so a public
+#: bot post on X cannot be used to spam Telegram replies.
+_UNAUTHORIZED_REPLY_COOLDOWN_S = 120.0
+
 
 class InboundPoller:
     """Polls inbound-enabled channels and runs supervised sessions for replies."""
@@ -88,6 +103,8 @@ class InboundPoller:
         #: matches a ``comm`` reflex rule (keyword) fires that rule instead of a
         #: free-form session — so "any message mentioning X → run workflow Y".
         self.reflex_router = reflex_router
+        #: sender_id -> monotonic last unauthorized reply time (process-local).
+        self._unauth_reply_at: dict[str, float] = {}
 
     # -- discovery ---------------------------------------------------------
     def inbound_channels(self) -> list[tuple[str, Channel]]:
@@ -186,7 +203,8 @@ class InboundPoller:
         if msg.is_bot:
             return {"channel": name, "status": "ignored_bot"}
 
-        # FAIL-CLOSED allowlist. An unauthorized sender spawns NOTHING.
+        # FAIL-CLOSED allowlist. An unauthorized sender NEVER runs commands,
+        # sessions, tools, or media generation — owner permission only.
         if not ch.is_authorized(msg.sender_id):
             log.warning(
                 "inbound: rejected unauthorized sender %r on channel %r",
@@ -197,14 +215,22 @@ class InboundPoller:
                 EventType.COMM_REJECTED,
                 {"channel": name, "sender": msg.sender_id},
             )
-            return {"channel": name, "status": "unauthorized", "sender": msg.sender_id}
+            replied = await self._reply_unauthorized(ch, msg)
+            return {
+                "channel": name,
+                "status": "unauthorized",
+                "sender": str(msg.sender_id),
+                "replied": replied,
+            }
 
         # PRIVATE-CHAT ONLY: in a group the originating chat.id != the sender's id,
         # and replying there would broadcast the session output to non-allowlisted
         # members. Refuse anything that isn't the sender's own 1:1 chat.
         if msg.reply_to is not None and str(msg.reply_to) != str(msg.sender_id):
             log.warning("inbound: refusing non-private chat on channel %r", name)
-            return {"channel": name, "status": "non_private", "sender": msg.sender_id}
+            # Never post into the group (would leak to non-allowlisted members).
+            # Quiet refuse only — no session, no media, no group broadcast.
+            return {"channel": name, "status": "non_private", "sender": str(msg.sender_id)}
 
         text = (msg.text or "").strip()
         if not text:
@@ -372,6 +398,31 @@ class InboundPoller:
             return []
         found.sort(key=lambda x: x.stat().st_mtime, reverse=True)
         return found[:_MAX_MEDIA_PER_REPLY]
+
+    async def _reply_unauthorized(self, ch: Channel, msg: InboundMessage) -> bool:
+        """Tell strangers the bot is owner-gated. Never runs tools/sessions.
+
+        Rate-limited per sender so a public X post cannot turn the bot into a
+        denial spam cannon. Returns True when a reply was attempted/sent.
+        """
+        import time
+
+        sid = str(msg.sender_id)
+        now = time.monotonic()
+        last = self._unauth_reply_at.get(sid, 0.0)
+        if now - last < _UNAUTHORIZED_REPLY_COOLDOWN_S:
+            return False
+        self._unauth_reply_at[sid] = now
+        body = self._format_reply(
+            _UNAUTHORIZED_REPLY.format(sender_id=sid)
+        )
+        try:
+            chat_id = msg.reply_to if msg.reply_to is not None else msg.sender_id
+            res = await asyncio.to_thread(ch.send, body, chat_id=chat_id)
+            return bool(res and res.get("ok"))
+        except Exception:  # noqa: BLE001
+            log.exception("unauthorized deny reply failed")
+            return False
 
     def _format_reply(self, reply: str) -> str:
         """Always produce a non-empty Telegram message body."""

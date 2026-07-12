@@ -158,7 +158,7 @@ async def test_authorized_sender_spawns_supervised_session_and_replies(platform)
 
 
 # --------------------------------------------------------------------------- #
-# UNAUTHORIZED sender => spawns NOTHING, no reply, no leak.
+# UNAUTHORIZED sender => spawns NOTHING; polite deny (no tools / no media).
 # --------------------------------------------------------------------------- #
 async def test_unauthorized_sender_spawns_nothing(platform):
     fake = FakeTelegram([_update(10, sender=999, text="rm -rf /")])
@@ -170,9 +170,14 @@ async def test_unauthorized_sender_spawns_nothing(platform):
 
     results = await poller.poll_once()
 
-    assert results == [{"channel": "tg", "status": "unauthorized", "sender": "999"}]
+    assert results[0]["status"] == "unauthorized"
+    assert results[0]["sender"] == "999"
     assert orch.list_sessions() == []
-    assert fake.sent == []
+    # Denial reply only — never a session / never generation.
+    msg_texts = [s for s in fake.sent if s.get("text")]
+    assert len(msg_texts) == 1
+    assert "permission" in (msg_texts[0].get("text") or "").lower()
+    assert "999" in (msg_texts[0].get("text") or "")
 
 
 async def test_empty_allowlist_authorizes_nobody(platform):
@@ -187,7 +192,9 @@ async def test_empty_allowlist_authorizes_nobody(platform):
 
     assert results[0]["status"] == "unauthorized"
     assert orch.list_sessions() == []
-    assert fake.sent == []
+    # Still tells the stranger the bot is gated (no tools run).
+    assert any("private" in (s.get("text") or "").lower() or "permission" in (s.get("text") or "").lower()
+               for s in fake.sent if s.get("text"))
 
 
 async def test_bot_messages_are_ignored(platform):
