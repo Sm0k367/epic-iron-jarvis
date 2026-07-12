@@ -1,7 +1,19 @@
 # Epic Tech AI — soundtrack
 
-Brand / demo audio for Epic Tech AI. Play in-browser below (works when this page is
-opened on GitHub, GitHub Pages, or locally).
+Brand / demo audio for Epic Tech AI.
+
+## Play (recommended)
+
+GitHub’s README often **cannot** embed `<audio>` (tags are stripped). Use:
+
+| | Link |
+|--|------|
+| **Dual player page** | https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/play.html |
+| **Track 1 stream** | https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-edm-instrumental.mp3 |
+| **Track 2 stream** | https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-dale-club.mp3 |
+
+jsDelivr serves `Content-Type: audio/mpeg` with range requests so browsers can stream.
+`raw.githubusercontent.com` often sends `Content-Disposition: attachment`, which breaks in-page players.
 
 ## Tracks
 
@@ -9,9 +21,8 @@ opened on GitHub, GitHub Pages, or locally).
 
 High-energy electronic / club instrumental — synths, punchy drums, ~128 BPM.
 
-<audio controls preload="metadata" style="width:100%;max-width:480px">
-  <source src="epic-tech-ai-edm-instrumental.mp3" type="audio/mpeg" />
-  <a href="epic-tech-ai-edm-instrumental.mp3">Download / play MP3</a>
+<audio controls preload="metadata" src="https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-edm-instrumental.mp3">
+  <a href="https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-edm-instrumental.mp3">Play MP3</a>
 </audio>
 
 - File: [epic-tech-ai-edm-instrumental.mp3](epic-tech-ai-edm-instrumental.mp3)
@@ -21,22 +32,19 @@ High-energy electronic / club instrumental — synths, punchy drums, ~128 BPM.
 
 Club electronic with a rhythmic vocal hook (“Dale, le le le…”).
 
-<audio controls preload="metadata" style="width:100%;max-width:480px">
-  <source src="epic-tech-ai-dale-club.mp3" type="audio/mpeg" />
-  <a href="epic-tech-ai-dale-club.mp3">Download / play MP3</a>
+<audio controls preload="metadata" src="https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-dale-club.mp3">
+  <a href="https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-dale-club.mp3">Play MP3</a>
 </audio>
 
 - File: [epic-tech-ai-dale-club.mp3](epic-tech-ai-dale-club.mp3)
 - Style: house / electronic pop, vocal sample hook
 
-## Local player
-
-Open [play.html](play.html) in any browser for a full dual-player page (no build step).
+## Local
 
 ```bash
 # from repo root
 python3 -m http.server 8080 --directory assets/audio
-# then open http://127.0.0.1:8080/play.html
+# open http://127.0.0.1:8080/play.html
 ```
 
 ## License / use

@@ -33,37 +33,42 @@ No cloud lock-in. No black boxes. Every action logged, every secret encrypted at
 
 ## 🎧 Soundtrack (playable)
 
-Brand / demo audio shipped in-repo under [`assets/audio/`](assets/audio/).
+Brand / demo audio lives in [`assets/audio/`](assets/audio/).
 
-> **GitHub tip:** open an `.mp3` link below — GitHub’s file view includes a built-in player.  
-> For dual players in one page, open [`assets/audio/play.html`](assets/audio/play.html) (raw / local browser).
+> **Why some players fail on GitHub:** README markdown **strips** `<audio>` tags, and
+> `raw.githubusercontent.com` often forces **download** instead of stream.  
+> Use the **jsDelivr** links below (streamable) or the [dual player page](https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/play.html).
 
 ### Track 1 — EDM instrumental (~3:30)
 
 High-energy electronic club instrumental (synths, punchy drums, ~128 BPM). No vocals.
 
-<audio controls preload="metadata">
-  <source src="assets/audio/epic-tech-ai-edm-instrumental.mp3" type="audio/mpeg" />
-</audio>
+**[▶ Open dual player (both tracks)](https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/play.html)**  
+**[▶ Stream / play Track 1 (MP3)](https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-edm-instrumental.mp3)**  
+[Repo file](assets/audio/epic-tech-ai-edm-instrumental.mp3) · [Download](https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-edm-instrumental.mp3)
 
-[▶ Play / download — epic-tech-ai-edm-instrumental.mp3](assets/audio/epic-tech-ai-edm-instrumental.mp3)
+<audio controls preload="metadata" src="https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-edm-instrumental.mp3">
+  Your client does not render audio tags — use the Stream link above.
+</audio>
 
 ### Track 2 — Dale club hook (~3:18)
 
 Club electronic with a rhythmic vocal hook (“Dale, le le le…”).
 
-<audio controls preload="metadata">
-  <source src="assets/audio/epic-tech-ai-dale-club.mp3" type="audio/mpeg" />
+**[▶ Stream / play Track 2 (MP3)](https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-dale-club.mp3)**  
+[Repo file](assets/audio/epic-tech-ai-dale-club.mp3) · [Download](https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-dale-club.mp3)
+
+<audio controls preload="metadata" src="https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-dale-club.mp3">
+  Your client does not render audio tags — use the Stream link above.
 </audio>
 
-[▶ Play / download — epic-tech-ai-dale-club.mp3](assets/audio/epic-tech-ai-dale-club.mp3)
+| Track | Play (stream) | Length |
+|-------|---------------|--------|
+| EDM instrumental | [jsDelivr MP3](https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-edm-instrumental.mp3) | ~3:30 |
+| Dale club hook | [jsDelivr MP3](https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-dale-club.mp3) | ~3:18 |
+| Both | [play.html on jsDelivr](https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/play.html) | — |
 
-| Track | File | Length |
-|-------|------|--------|
-| EDM instrumental | [assets/audio/epic-tech-ai-edm-instrumental.mp3](assets/audio/epic-tech-ai-edm-instrumental.mp3) | ~3:30 |
-| Dale club hook | [assets/audio/epic-tech-ai-dale-club.mp3](assets/audio/epic-tech-ai-dale-club.mp3) | ~3:18 |
-
-Full notes + local player: [assets/audio/README.md](assets/audio/README.md) · [play.html](assets/audio/play.html)
+Notes: [assets/audio/README.md](assets/audio/README.md)
 
 ---
 

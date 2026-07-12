@@ -52,35 +52,59 @@
       color: var(--muted);
       font-size: 0.85rem;
     }
+    .err { color: #f88; font-size: 0.85rem; margin-top: 0.5rem; display: none; }
   </style>
 </head>
 <body>
   <main>
     <h1>Epic Tech AI — Soundtrack</h1>
-    <p class="sub">Brand / demo tracks. Use the players below or open the MP3 files directly on GitHub.</p>
+    <p class="sub">
+      Brand / demo tracks. Players use CDN URLs so they work on GitHub and offline mirrors.
+      If a control looks empty, use the direct MP3 link under each track.
+    </p>
 
     <section class="track">
       <h2>1 · EDM instrumental</h2>
       <p class="meta">~3:30 · instrumental electronic / club · ~128 BPM</p>
-      <audio controls preload="metadata">
+      <audio id="a1" controls preload="metadata" crossorigin="anonymous">
         <source src="epic-tech-ai-edm-instrumental.mp3" type="audio/mpeg" />
-        Your browser does not support audio. <a href="epic-tech-ai-edm-instrumental.mp3">Download MP3</a>
+        <source src="https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-edm-instrumental.mp3" type="audio/mpeg" />
       </audio>
+      <p class="err" id="e1">Could not load audio — open the direct link below.</p>
+      <p class="meta" style="margin-top:0.65rem">
+        <a href="https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-edm-instrumental.mp3">Direct stream (jsDelivr)</a>
+        · <a href="epic-tech-ai-edm-instrumental.mp3">Relative MP3</a>
+      </p>
     </section>
 
     <section class="track">
       <h2>2 · Dale club hook</h2>
       <p class="meta">~3:18 · electronic / house · vocal hook “Dale, le le le…”</p>
-      <audio controls preload="metadata">
+      <audio id="a2" controls preload="metadata" crossorigin="anonymous">
         <source src="epic-tech-ai-dale-club.mp3" type="audio/mpeg" />
-        Your browser does not support audio. <a href="epic-tech-ai-dale-club.mp3">Download MP3</a>
+        <source src="https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-dale-club.mp3" type="audio/mpeg" />
       </audio>
+      <p class="err" id="e2">Could not load audio — open the direct link below.</p>
+      <p class="meta" style="margin-top:0.65rem">
+        <a href="https://cdn.jsdelivr.net/gh/Sm0k367/epic-iron-jarvis@master/assets/audio/epic-tech-ai-dale-club.mp3">Direct stream (jsDelivr)</a>
+        · <a href="epic-tech-ai-dale-club.mp3">Relative MP3</a>
+      </p>
     </section>
 
     <footer>
-      <a href="../../README.md">← Back to README</a>
+      <a href="https://github.com/Sm0k367/epic-iron-jarvis">GitHub repo</a>
       · Epic Tech AI · epictechai@gmail.com
     </footer>
   </main>
+  <script>
+    function wire(id, errId) {
+      var a = document.getElementById(id);
+      var e = document.getElementById(errId);
+      if (!a) return;
+      a.addEventListener("error", function () { if (e) e.style.display = "block"; });
+    }
+    wire("a1", "e1");
+    wire("a2", "e2");
+  </script>
 </body>
 </html>
