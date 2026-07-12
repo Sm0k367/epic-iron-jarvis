@@ -34,17 +34,30 @@ def _event_field(event: Any, attr: str, default: Any = None) -> Any:
 
 def format_event(event: Any) -> str:
     """Build a concise human-readable alert line from an event."""
+    from ..brand import PRODUCT_NAME
+
     etype = _event_field(event, "type", "event")
     payload = _event_field(event, "payload", {}) or {}
     session_id = _event_field(event, "session_id")
+    # Chatty session summaries already go to the user via the inbound reply —
+    # keep alerts short and brand-correct.
+    if etype == EventType.SESSION_COMPLETED:
+        summary = str(payload.get("summary") or "").strip()
+        status = payload.get("status") or "done"
+        if summary:
+            short = summary if len(summary) <= 280 else summary[:277] + "…"
+            return f"{PRODUCT_NAME}: ✓ {status} — {short}"
+        return f"{PRODUCT_NAME}: session {status}" + (
+            f" ({session_id})" if session_id else ""
+        )
     parts = [
         f"{k}={v}"
         for k, v in payload.items()
-        if k != "content" and not isinstance(v, (dict, list))
+        if k != "content" and k != "summary" and not isinstance(v, (dict, list))
     ]
     detail = f" — {', '.join(parts)}" if parts else ""
     suffix = f" (session {session_id})" if session_id else ""
-    return f"Iron Jarvis: {etype}{detail}{suffix}"
+    return f"{PRODUCT_NAME}: {etype}{detail}{suffix}"
 
 
 class Notifier:
@@ -61,6 +74,8 @@ class Notifier:
             set(event_types) if event_types is not None else set(DEFAULT_ALERT_EVENTS)
         )
         self._formatter = formatter or format_event
+        # Session ids that inbound chat already answers — skip duplicate alerts.
+        self._suppress_session_alerts: set[str] = set()
 
     # -- channel management ---------------------------------------------
     def add_channel(self, name: str, channel: Channel) -> None:
@@ -105,6 +120,11 @@ class Notifier:
                 results[name] = {"ok": False, "detail": f"{type(exc).__name__}: {exc}"}
         return results
 
+    def suppress_session_alert(self, session_id: str) -> None:
+        """Inbound chat will reply for this session — don't also push an alert."""
+        if session_id:
+            self._suppress_session_alerts.add(str(session_id))
+
     # -- event bus adapter ----------------------------------------------
     def on_event(self, event: Any) -> dict[str, dict[str, Any]] | None:
         """EventBus handler: alert on subscribed event types, ignore the rest.
@@ -114,5 +134,13 @@ class Notifier:
         """
         etype = _event_field(event, "type")
         if etype not in self.event_types:
+            return None
+        session_id = _event_field(event, "session_id")
+        if (
+            etype == EventType.SESSION_COMPLETED
+            and session_id
+            and str(session_id) in self._suppress_session_alerts
+        ):
+            self._suppress_session_alerts.discard(str(session_id))
             return None
         return self.notify(self._formatter(event))

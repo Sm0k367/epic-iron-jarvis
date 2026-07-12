@@ -195,6 +195,10 @@ class Channel(ABC):
         return {"ok": False, "detail": detail}
 
     # -- contract --------------------------------------------------------
+    def typing(self, chat_id: Any = None) -> dict[str, Any]:
+        """Optional 'is typing' indicator. No-op on channels that lack it."""
+        return {"ok": True, "detail": "typing-noop"}
+
     @abstractmethod
     def send(self, message: str, **kw: Any) -> dict[str, Any]:
         """Send ``message``; return ``{"ok": bool, "detail": str}``."""

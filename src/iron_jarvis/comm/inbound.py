@@ -192,6 +192,7 @@ class InboundPoller:
         # replied immediately — no agent session spun up. Non-command text falls
         # through to the normal session path below.
         if self.command_interpreter is not None and text.startswith("/"):
+            await asyncio.to_thread(ch.typing, msg.reply_to)
             reply = await self.command_interpreter.interpret(text)
             if reply is not None:
                 body = f"{self.reply_prefix}{reply}"[: self.max_reply_chars]
@@ -229,21 +230,47 @@ class InboundPoller:
                     "sent": bool(send_res.get("ok")),
                 }
 
+        # Live chat UX: typing indicator + short "working" ack, then run the
+        # session while refreshing typing so Telegram shows activity.
+        chat_id = msg.reply_to
+        await asyncio.to_thread(ch.typing, chat_id)
+        ack = f"{self.reply_prefix}Working on it…"[: self.max_reply_chars]
+        await asyncio.to_thread(ch.send, ack, chat_id=chat_id)
+
         # Spawn a NORMAL supervised session (same orchestrator + permission
         # engine as a local user) and await its result.
         session = await self.orchestrator.create_session(text, self.agent_type)
+        # Suppress the generic session.completed push-alert — we reply in-chat.
+        notifier = getattr(self, "notifier", None)
+        if notifier is not None and hasattr(notifier, "suppress_session_alert"):
+            notifier.suppress_session_alert(session.id)
         await self._publish(
             EventType.COMM_RECEIVED,
             {"channel": name, "sender": msg.sender_id, "task": text},
             session_id=session.id,
         )
-        session = await self.orchestrator.run_session(session.id)
+
+        run_task = asyncio.create_task(self.orchestrator.run_session(session.id))
+        # Refresh typing every ~4s while the agent works (Telegram TTL ~5s).
+        while not run_task.done():
+            await asyncio.to_thread(ch.typing, chat_id)
+            try:
+                await asyncio.wait_for(asyncio.shield(run_task), timeout=4.0)
+            except asyncio.TimeoutError:
+                continue
+        session = await run_task
 
         reply = (session.summary or "(no result)").strip()
+        # Prefer a clean chat answer over a raw system dump.
+        if reply.startswith("Delegated the task"):
+            reply = (
+                "Done — I broke the task into sub-steps and finished them.\n\n"
+                f"{reply}"
+            )
         body = f"{self.reply_prefix}{reply}"[: self.max_reply_chars]
         # Safe to reply to the originating chat: we only reach here for the
         # sender's own private chat (the non-private guard above refused groups).
-        send_res = await asyncio.to_thread(ch.send, body, chat_id=msg.reply_to)
+        send_res = await asyncio.to_thread(ch.send, body, chat_id=chat_id)
         return {
             "channel": name,
             "status": "handled",

@@ -96,7 +96,24 @@ class TelegramChannel(Channel):
         if not chat_id:
             return self._fail("telegram: config needs `chat_id`")
         url = f"{TELEGRAM_API}/bot{token}/sendMessage"
-        return self._post(url, {"chat_id": chat_id, "text": message})
+        payload: dict[str, Any] = {"chat_id": chat_id, "text": message}
+        # Optional Telegram formatting (MarkdownV2 / HTML) when callers request it.
+        parse_mode = kw.get("parse_mode")
+        if parse_mode:
+            payload["parse_mode"] = parse_mode
+        return self._post(url, payload)
+
+    def typing(self, chat_id: Any = None) -> dict[str, Any]:
+        """Show the Telegram 'typing…' indicator (lasts ~5s on the client)."""
+        token_secret = self.config.get("token_secret")
+        token = self._resolve_secret(token_secret)
+        if not token:
+            return self._fail("telegram: no token for typing")
+        cid = chat_id if chat_id is not None else self.config.get("chat_id")
+        if not cid:
+            return self._fail("telegram: no chat_id for typing")
+        url = f"{TELEGRAM_API}/bot{token}/sendChatAction"
+        return self._post(url, {"chat_id": cid, "action": "typing"})
 
     def poll(
         self, offset: int = 0, *, timeout: int = 0
@@ -196,7 +213,7 @@ class EmailChannel(Channel):
             from email.message import EmailMessage
 
             msg = EmailMessage()
-            msg["Subject"] = kw.get("subject") or cfg.get("subject") or "Iron Jarvis"
+            msg["Subject"] = kw.get("subject") or cfg.get("subject") or "Epic Tech AI"
             msg["From"] = from_addr
             msg["To"] = to_addr
             msg.set_content(message)
