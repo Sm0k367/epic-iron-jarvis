@@ -24,6 +24,9 @@ ENV_TO_VAULT: list[tuple[str, str]] = [
     ("TAVILY_API_KEY", "tavily_api_key"),
     ("FIRECRAWL_API_KEY", "firecrawl_api_key"),
     ("FAL_KEY", "fal_key"),
+    # Connections + pixio_* tools resolve the bare secret name "pixio".
+    # Keep pixio_api_key as a legacy alias so older installs still load.
+    ("PIXIO_API_KEY", "pixio"),
     ("PIXIO_API_KEY", "pixio_api_key"),
     ("UPLOADTHING_SECRET", "uploadthing_secret"),
     ("UPLOADTHING_APP_ID", "uploadthing_app_id"),
@@ -84,10 +87,11 @@ def main() -> int:
         stored += 1
         print(f"  vault: set {vault_name} (from {env_name}, len={len(val)})")
 
-    # Mark LLM providers connected (vault + ConnectionRecord) without printing keys.
+    # Mark providers connected (vault + ConnectionRecord) without printing keys.
     for provider, env_name in (
         ("xai", "XAI_API_KEY"),
         ("groq", "GROQ_API_KEY"),
+        ("pixio", "PIXIO_API_KEY"),
     ):
         key = os.environ.get(env_name, "").strip()
         if not key:

@@ -382,7 +382,19 @@ class ConnectionRegistry:
             if token:
                 return token
         if spec.supports_api_key:
-            return self.secrets.get(spec.key_secret_name or f"{provider}_api_key")
+            primary = self.secrets.get(spec.key_secret_name or f"{provider}_api_key")
+            if primary:
+                return primary
+            # Pixio: load_env_to_vault historically wrote "pixio_api_key"; Connections
+            # uses bare "pixio". Prefer a longer/valid sibling over a truncated primary.
+            if provider == "pixio":
+                alias = self.secrets.get("pixio_api_key")
+                if alias:
+                    return alias
+                env = os.environ.get("PIXIO_API_KEY", "").strip()
+                if env:
+                    return env
+            return None
         if spec.method == "oauth":  # oauth-only spec with no embedded client
             return self._oauth_access_token(provider, spec)
         return None
@@ -404,7 +416,14 @@ class ConnectionRegistry:
             if token and token.get("access_token"):
                 return True
         if spec.supports_api_key:
-            return bool(self.secrets.get(spec.key_secret_name or f"{provider}_api_key"))
+            if self.secrets.get(spec.key_secret_name or f"{provider}_api_key"):
+                return True
+            if provider == "pixio" and (
+                self.secrets.get("pixio_api_key")
+                or os.environ.get("PIXIO_API_KEY", "").strip()
+            ):
+                return True
+            return False
         if spec.method == "oauth":
             token = self.secrets.get_oauth(f"{provider}_oauth")
             return bool(token and token.get("access_token"))

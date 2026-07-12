@@ -565,7 +565,14 @@ def build_platform(
         artifacts.save(name, blob, kind=kind, filename=filename, session_id=session_id)
 
     for tool in pixio_tools(
-        key_resolver=lambda: secrets.get("pixio") or os.environ.get("PIXIO_API_KEY"),
+        # Prefer the Connections secret name "pixio"; fall back to the env-loader
+        # alias "pixio_api_key" and PIXIO_API_KEY so a mis-named vault entry
+        # never leaves creative media stuck on a stale/truncated key.
+        key_resolver=lambda: (
+            secrets.get("pixio")
+            or secrets.get("pixio_api_key")
+            or os.environ.get("PIXIO_API_KEY")
+        ),
         artifact_sink=_creative_sink,
     ):
         registry.register(tool)
