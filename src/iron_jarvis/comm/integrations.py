@@ -69,7 +69,8 @@ def channel_integrations() -> list[IntegrationSpec]:
             "telegram",
             "communication",
             "Send AND receive Telegram messages via the Bot API. Two-way comm: "
-            "set inbound_enabled + allowed_senders to text Iron Jarvis a task.",
+            "set inbound_enabled + allowed_senders to text Epic Tech AI a task "
+            "(/status, /run, free-text sessions).",
             config_fields=["chat_id", "inbound_enabled", "allowed_senders"],
             secret_fields=["token_secret"],
         ),

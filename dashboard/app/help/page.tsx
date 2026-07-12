@@ -385,6 +385,42 @@ export default function HelpPage() {
         </Card>
       </Reveal>
 
+      {/* Telegram */}
+      <Reveal>
+        <Card title="Telegram bot (Epic Tech AI)" icon={<Smartphone size={15} />}>
+          <p className="text-[13px] leading-relaxed text-zinc-400">
+            Phone control uses a bot you create in Telegram. Recommended display name{" "}
+            <strong className="text-zinc-200">Epic Tech AI</strong>, username{" "}
+            <code className="rounded bg-white/5 px-1 text-zinc-300">@EpicTechAI_bot</code>{" "}
+            (must be unique — pick another <code className="text-zinc-300">*bot</code> if taken).
+            Replies are prefixed <code className="text-zinc-300">Epic Tech AI:</code>.
+          </p>
+          <ol className="mt-3 list-decimal space-y-1 pl-5 text-[13px] text-zinc-400">
+            <li>
+              Message <strong className="text-zinc-300">@BotFather</strong> →{" "}
+              <code className="text-zinc-300">/newbot</code> → name{" "}
+              <em>Epic Tech AI</em>, username e.g. <em>EpicTechAI_bot</em>
+            </li>
+            <li>Copy the bot token (vault only — never commit it)</li>
+            <li>
+              Get your numeric user id from <code className="text-zinc-300">@userinfobot</code>
+            </li>
+            <li>
+              <Link href="/channels" className="text-accent-soft hover:text-accent">
+                Channels
+              </Link>
+              : add type <code className="text-zinc-300">telegram</code>, paste token + chat id,
+              set two-way <code className="text-zinc-300">true</code>, allowlist your user id
+            </li>
+            <li>Keep the daemon running (tray is fine). DM the bot: /help, /status, free text</li>
+          </ol>
+          <p className="mt-3 text-[12px] text-zinc-500">
+            Full walkthrough: repo <code className="text-zinc-400">docs/TELEGRAM.md</code>.
+            Allowlist is fail-closed — empty list means nobody can command the bot.
+          </p>
+        </Card>
+      </Reveal>
+
       {/* Legal & contact */}
       <Reveal>
         <Card title="Legal, privacy & contact" icon={<Scale size={15} />}>

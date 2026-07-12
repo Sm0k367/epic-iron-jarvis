@@ -1291,9 +1291,18 @@ def create_app(project_root: str | None = None) -> FastAPI:
         ],
         "telegram": [
             {"key": "token", "label": "Bot token", "secret": True,
-             "help": "From @BotFather."},
-            {"key": "chat_id", "label": "Chat ID", "secret": False,
-             "help": "Your numeric chat id (message @userinfobot to find it)."},
+             "help": "From @BotFather. Create a bot named 'Epic Tech AI' "
+                     "(username e.g. @EpicTechAI_bot)."},
+            {"key": "chat_id", "label": "Default chat ID (outbound alerts)", "secret": False,
+             "help": "Your numeric chat id for outbound notifications "
+                     "(message @userinfobot or @getidsbot)."},
+            {"key": "inbound_enabled", "label": "Enable two-way (true/false)", "secret": False,
+             "help": "Set true so allowlisted people can DM the bot tasks + /commands. "
+                     "Off by default. Daemon must stay running to poll."},
+            {"key": "allowed_senders", "label": "Allowlist (Telegram user IDs)", "secret": False,
+             "help": "Comma-separated numeric user ids allowed to command the bot. "
+                     "FAIL-CLOSED: empty = nobody may command. "
+                     "Usually the same as your chat id for a private DM."},
         ],
         "email": [
             {"key": "host", "label": "SMTP host", "secret": False, "help": "e.g. smtp.gmail.com"},

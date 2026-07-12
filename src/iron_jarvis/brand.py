@@ -14,6 +14,9 @@ CONTACT_X = "https://x.com/EpicTechAI"
 CONTACT_X_HANDLE = "@EpicTechAI"
 GITHUB_REPO = "https://github.com/Sm0k367/epic-iron-jarvis"
 REPLY_PREFIX = "Epic Tech AI: "
+# Recommended Telegram BotFather names (username must be unique on Telegram).
+TELEGRAM_BOT_DISPLAY_NAME = "Epic Tech AI"
+TELEGRAM_BOT_USERNAME_HINT = "EpicTechAI_bot"  # becomes @EpicTechAI_bot if free
 CLI_NAME = "epic"  # dual entrypoint; ironjarvis still works
 HOME_ENV = "EPIC_HOME"  # preferred; IRONJARVIS_HOME still honored
 LEGACY_HOME_ENV = "IRONJARVIS_HOME"

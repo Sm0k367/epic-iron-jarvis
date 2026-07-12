@@ -1,10 +1,12 @@
 # Reflexes — the Ambient Operator
 
-A **reflex** makes Iron Jarvis act on its own: an inbound signal (a webhook
+A **reflex** makes **Epic Tech AI** act on its own: an inbound signal (a webhook
 firing, or a message on a comm channel) runs a bound action — a saved workflow,
 a remote agent, or a supervised session. A **command grammar** lets you drive the
-machine from your phone. Everything is opt-in and runs through the normal
-permission engine, so a remote signal never gets more power than you do locally.
+machine from your phone (Telegram bot display name **Epic Tech AI**, username
+e.g. **`@EpicTechAI_bot`** — see [TELEGRAM.md](./TELEGRAM.md)). Everything is
+opt-in and runs through the normal permission engine, so a remote signal never
+gets more power than you do locally.
 
 Manage it all on the **Reflexes** page (Automate → Reflexes, or `/reflex`). The
 Overview's **Ambient operator** card shows how many reflexes are active and their
@@ -62,10 +64,15 @@ Enable inbound on a comm channel (e.g. Telegram) with your sender allowlisted
 | `/agents` | list remote agents |
 | `/ask <agent> <task>` | ask a remote agent and get the reply |
 | `/sessions` | recent sessions |
+| `/balance` | credit balance |
+| `/buy [product_id]` | credit packs / Stripe checkout link |
+| `/usage` | token usage summary |
 | `/help` | this list |
 
 Any message that is **not** a command runs as a normal supervised session (and
-replies the summary), exactly as before.
+replies the summary), exactly as before. Replies are prefixed **`Epic Tech AI:`**.
+
+Full Telegram BotFather setup: **[TELEGRAM.md](./TELEGRAM.md)**.
 
 ## Walkthrough 3 — a keyword that triggers work
 

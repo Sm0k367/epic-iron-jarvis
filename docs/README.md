@@ -10,6 +10,7 @@ Start at the repo root **[README](../README.md)** for product documentation.
 |------|------------|
 | [TOKEN-POLICY.md](TOKEN-POLICY.md) | Secrets handling + token / credit budgets (never hardcode keys) |
 | [REFLEX.md](REFLEX.md) | Ambient operator + phone command grammar (`/status`, `/balance`, …) |
+| [TELEGRAM.md](TELEGRAM.md) | BotFather setup — name **Epic Tech AI** / `@EpicTechAI_bot`, allowlist, two-way |
 | [SIGNING.md](SIGNING.md) | Code-signing the Windows installer |
 | [COMPUTER-USE.md](COMPUTER-USE.md) | Computer-use safety mapping |
 

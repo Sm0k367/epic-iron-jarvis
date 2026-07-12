@@ -55,7 +55,7 @@ class InboundPoller:
         event_bus: Any = None,
         poll_timeout: int = 0,
         agent_type: AgentType = AgentType.SUPERVISOR,
-        reply_prefix: str = "Iron Jarvis: ",
+        reply_prefix: str = "Epic Tech AI: ",
         max_reply_chars: int = 3500,
         command_interpreter: Any = None,
         reflex_router: Any = None,
