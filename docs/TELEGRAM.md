@@ -30,9 +30,23 @@ You choose the username when creating the bot with **@BotFather**. The software 
 5. Copy the **HTTP API token** (looks like `123456:ABC-DEF...`).
    - Store it only in Secrets / the channel form — **never commit it**.
 
-Optional BotFather polish:
+### Brand the profile (name, about, photo, commands)
+
+From the repo (uses token from `.env` / vault — never prints it):
+
+```powershell
+uv run python scripts/brand_telegram_profile.py
+# optional custom photo:
+uv run python scripts/brand_telegram_profile.py --photo path\to\logo.png
+```
+
+This sets **Epic Tech AI** display name, description, about, command menu, and
+profile photo (`desktop/assets/icon.png` by default).
+
+Or via BotFather:
 
 ```
+/setname — Epic Tech AI
 /setdescription — Local-first AI OS · agents, workflows, credits · Epic Tech AI
 /setabouttext — epictechai@gmail.com · x.com/EpicTechAI
 /setuserpic — your Epic Tech AI logo

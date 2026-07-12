@@ -49,8 +49,11 @@ class FakeTelegram:
             self.updates = [u for u in self.updates if u["update_id"] >= offset]
         return {"ok": True, "result": list(self.updates)}
 
-    # POST sendMessage
+    # POST sendMessage / sendChatAction
     def post(self, url: str, payload: dict[str, Any]) -> dict[str, Any]:
+        if "sendChatAction" in url:
+            self.sent.append({"_action": payload.get("action"), **payload})
+            return {"status_code": 200, "ok": True}
         assert "sendMessage" in url
         self.sent.append(payload)
         return {"status_code": 200}
@@ -142,13 +145,16 @@ async def test_authorized_sender_spawns_supervised_session_and_replies(platform)
 
     assert len(results) == 1 and results[0]["status"] == "handled"
     sessions = orch.list_sessions()
-    assert len(sessions) == 1
-    assert sessions[0].agent_type.value == "supervisor"
-    assert sessions[0].task == "do the thing"
-    # Replied back to the sender's chat with the session summary.
-    assert len(fake.sent) == 1
-    assert fake.sent[0]["chat_id"] == 777
-    assert fake.sent[0]["text"]
+    # Supervisor may spawn child sessions — at least one root task matches.
+    assert any(s.task == "do the thing" for s in sessions)
+    root = next(s for s in sessions if s.task == "do the thing")
+    assert root.agent_type.value == "supervisor"
+    # Ack ("Working on it…") + final summary; typing posts sendChatAction too.
+    msg_texts = [s for s in fake.sent if s.get("text")]
+    assert len(msg_texts) >= 2
+    assert any("Working" in (s.get("text") or "") for s in msg_texts)
+    assert msg_texts[-1]["chat_id"] == 777
+    assert msg_texts[-1]["text"]
 
 
 # --------------------------------------------------------------------------- #
