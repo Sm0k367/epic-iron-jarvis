@@ -37,6 +37,7 @@ ENV_TO_VAULT: list[tuple[str, str]] = [
     ("STRIPE_SECRET_KEY", "stripe_secret_key"),
     ("STRIPE_WEBHOOK_SECRET", "stripe_webhook_secret"),
     ("TELEGRAM_BOT_TOKEN", "telegram_bot_token"),
+    ("TELEGRAM_CHAT_ID", "telegram_chat_id"),
 ]
 
 
