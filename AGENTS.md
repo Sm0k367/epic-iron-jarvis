@@ -1,5 +1,8 @@
 # Agents: read CLAUDE.md
 
+**Product:** Epic Tech AI · **Contact:** epictechai@gmail.com · **X:** @EpicTechAI  
+**Secrets:** never hardcode — vault / gitignored `.env` only.
+
 The full operating manual for AI agents working on this repo — architecture
 map, commands, release flow, and the hard rules learned from production
 incidents — lives in [CLAUDE.md](./CLAUDE.md). It applies to every agent

@@ -1,11 +1,11 @@
 {
-  "name": "iron-jarvis-desktop",
-  "productName": "Iron Jarvis",
+  "name": "epic-tech-ai-desktop",
+  "productName": "Epic Tech AI",
   "version": "1.49.0",
   "private": true,
-  "description": "Native desktop wrapper for Iron Jarvis. Boots the local Python daemon (uv run ironjarvis serve) and the Next.js dashboard (pnpm start), then opens them in a native window.",
+  "description": "Native desktop wrapper for Epic Tech AI. Boots the local Python daemon and Next.js dashboard in a native window.",
   "main": "main.js",
-  "author": "RealDealCPA",
+  "author": "Epic Tech AI <epictechai@gmail.com>",
   "license": "UNLICENSED",
   "_signing_comments": {
     "publisherName": "SET THIS to the EXACT subject Common Name (CN) of your code-signing certificate, e.g. 'RealDealCPA LLC' (Azure Trusted Signing) or 'Valentino <Lastname>' (individual OV cert). It is currently a PLACEHOLDER — while it does not match a real signed binary, keep build.win.verifyUpdateCodeSignature = false (see below). See docs/SIGNING.md.",
@@ -33,8 +33,8 @@
     ]
   },
   "build": {
-    "appId": "com.realdealcpa.ironjarvis",
-    "productName": "Iron Jarvis",
+    "appId": "com.epictechai.epicjarvis",
+    "productName": "Epic Tech AI",
     "directories": {
       "output": "release"
     },
@@ -66,8 +66,8 @@
     "publish": [
       {
         "provider": "github",
-        "owner": "RealDealCPA-VR",
-        "repo": "Iron-Jarvis",
+        "owner": "Sm0k367",
+        "repo": "epic-iron-jarvis",
         "releaseType": "release"
       }
     ]

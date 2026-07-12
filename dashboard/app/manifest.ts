@@ -4,9 +4,9 @@ import type { MetadataRoute } from "next";
 // Colors mirror the dark crimson/cyan arc-reactor theme (ink-950 + accent).
 export default function manifest(): MetadataRoute.Manifest {
   return {
-    name: "Iron Jarvis",
-    short_name: "Jarvis",
-    description: "Control center for the Iron Jarvis daemon.",
+    name: "Epic Tech AI",
+    short_name: "Epic",
+    description: "Epic Tech AI control center — local-first agents, Telegram, credits.",
     start_url: "/",
     scope: "/",
     display: "standalone",

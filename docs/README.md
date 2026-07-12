@@ -1,27 +1,23 @@
-# Internal build docs
+# Epic Tech AI — internal docs
 
-Start at the repo root [README](../README.md) for user documentation.
+Start at the repo root **[README](../README.md)** for product documentation.
 
-**Living reference docs:**
+**Brand:** Epic Tech AI · **Contact:** epictechai@gmail.com · **X:** [@EpicTechAI](https://x.com/EpicTechAI)
 
-| File | What it is |
-|---|---|
-| [REFLEX.md](REFLEX.md) | Reflexes / the Ambient Operator — webhooks & messages that run workflows, remote agents, or sessions, plus the phone command grammar |
-| [SIGNING.md](SIGNING.md) | What code-signing the Windows installer takes (options, costs, CI wiring) |
-
-**Build-time plans and audit reports** (kept for history — not maintained):
+## Living reference
 
 | File | What it is |
-|---|---|
-| [PLAN.md](PLAN.md) | The original phased build plan |
-| [TASKS.md](TASKS.md) | The running build log |
-| [FEATURES-PLAN.md](FEATURES-PLAN.md) | Feature-round planning notes |
-| [AUDIT.md](AUDIT.md) | Red-team audit round |
-| [PRODUCTION-AUDIT.md](PRODUCTION-AUDIT.md) | Production-readiness audit |
-| [COMPLETENESS-AUDIT.md](COMPLETENESS-AUDIT.md) | Feature-completeness audit |
-| [SEAMLESS-AUDIT.md](SEAMLESS-AUDIT.md) | Daily-driver/seamlessness audit |
-| [WIRING-AUDIT.md](WIRING-AUDIT.md) | Frontend↔backend wiring audit |
-| [COMPUTER-USE.md](COMPUTER-USE.md) | Computer-use best-practices mapping |
+|------|------------|
+| [TOKEN-POLICY.md](TOKEN-POLICY.md) | Secrets handling + token / credit budgets (never hardcode keys) |
+| [REFLEX.md](REFLEX.md) | Ambient operator + phone command grammar (`/status`, `/balance`, …) |
+| [SIGNING.md](SIGNING.md) | Code-signing the Windows installer |
+| [COMPUTER-USE.md](COMPUTER-USE.md) | Computer-use safety mapping |
 
-Numbers (test counts, route counts) in these snapshots reflect the moment they
-were written and are not maintained.
+## Historical plans & audits
+
+| File | What it is |
+|------|------------|
+| [PLAN.md](PLAN.md) · [TASKS.md](TASKS.md) · [FEATURES-PLAN.md](FEATURES-PLAN.md) | Build history (Iron Jarvis era) |
+| [AUDIT.md](AUDIT.md) · [PRODUCTION-AUDIT.md](PRODUCTION-AUDIT.md) · … | Snapshots — numbers not maintained |
+
+Core engine upstream: [Iron Jarvis](https://github.com/RealDealCPA-VR/Iron-Jarvis).

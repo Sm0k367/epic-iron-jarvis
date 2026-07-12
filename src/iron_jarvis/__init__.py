@@ -1,11 +1,13 @@
-"""Iron Jarvis - a local-first AI operating system.
+"""Epic Tech AI — local-first AI operating system (Iron Jarvis core).
 
-A multi-agent orchestrator on your own machine: a supervisor delegates to
-specialist agents that work in sandboxed, review-gated git worktrees, backed by
-layered + long-term memory, a fail-closed permission engine, providers/router
-(Anthropic / OpenAI / Google / local Ollama / offline mock), scheduler, webhooks,
-integrations, comm channels, an encrypted secrets vault, opt-in computer use, and
-a Next.js control center.
+Multi-agent orchestration on your machine: supervisor → specialists, sandboxed
+review-gated worktrees, layered + long-term memory, fail-closed permissions,
+providers (Anthropic / OpenAI / Google / xAI / Groq / OpenRouter / Ollama / mock),
+Telegram Reflex commands, credits billing, connector marketplace, creative
+studio, projects, and a Next.js control center.
+
+Brand: Epic Tech AI · epictechai@gmail.com · https://x.com/EpicTechAI
+Secrets: never hardcode — use .env (gitignored) or the encrypted vault only.
 """
 
-__version__ = "1.49.0"
+__version__ = "1.49.0+epic.1"

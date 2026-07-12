@@ -1,8 +1,10 @@
-# Iron Jarvis — Agent Operating Manual
+# Epic Tech AI — Agent Operating Manual
 
-You are working on Iron Jarvis: a local-first AI operating system. One Python
-daemon (FastAPI), one Next.js dashboard, one Electron desktop wrapper. The user
-runs the PACKAGED desktop app daily — treat every change as production.
+You are working on **Epic Tech AI** (engine: Iron Jarvis core): a local-first AI
+operating system. One Python daemon (FastAPI), one Next.js dashboard, one
+Electron desktop wrapper. Brand: Epic Tech AI · epictechai@gmail.com · @EpicTechAI.
+**Never hardcode API keys** — use `.env` (gitignored) or the encrypted vault.
+Treat every change as production.
 
 ## The three processes
 
