@@ -41,7 +41,6 @@ import {
   LifeBuoy,
   Scale,
   Shield,
-  FileText,
   Coins,
   type LucideIcon,
 } from "lucide-react";
