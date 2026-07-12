@@ -135,7 +135,7 @@ const QUICK_ACTIONS: {
   desc: string;
   icon: ReactNode;
 }[] = [
-  { href: "/chat", title: "New chat", desc: "Talk to Iron Jarvis", icon: <MessageSquare size={18} /> },
+  { href: "/chat", title: "New chat", desc: "Talk to Epic Tech AI", icon: <MessageSquare size={18} /> },
   { href: "/sessions", title: "New session", desc: "Run an agent task", icon: <Boxes size={18} /> },
   { href: "/projects", title: "Open a project", desc: "Your context spine", icon: <FolderKanban size={18} /> },
   { href: "/creative", title: "Creative", desc: "Images, video, audio", icon: <Images size={18} /> },
@@ -301,7 +301,7 @@ function ReactorHero({
         {/* Wordmark + status + stats */}
         <div className="min-w-0 text-center lg:text-left">
           <div className="text-[11px] font-medium uppercase tracking-[0.22em] text-accent-soft/70">
-            Iron Jarvis
+            Epic Tech AI
           </div>
           <h1 className="text-gradient mt-2 text-3xl font-semibold leading-tight tracking-tight sm:text-[2.6rem]">
             {statusLine}
@@ -626,7 +626,7 @@ export default function OverviewPage() {
       <Reveal>
         <PageHeader
           title="Overview"
-          subtitle="Health, metrics, and live activity for the Iron Jarvis daemon."
+          subtitle="Health, metrics, and live activity for the Epic Tech AI daemon."
           actions={
             health.data ? (
               <span className="flex items-center gap-2 rounded-lg border border-white/10 bg-white/[0.03] px-3 py-1.5 text-xs text-zinc-300">

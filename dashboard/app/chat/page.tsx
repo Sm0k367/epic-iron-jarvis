@@ -1836,7 +1836,7 @@ export default function ChatPage() {
       <Reveal>
         <PageHeader
           title="Chat"
-          subtitle="Talk to Iron Jarvis. Chat mode answers directly in seconds; Agent mode does real work with tools."
+          subtitle="Talk to Epic Tech AI. Chat mode answers directly in seconds; Agent mode does real work with tools."
           actions={
             <div className="flex flex-wrap items-center gap-2">
               {/* Voice: hands-free Voice Chat + spoken-replies toggle. */}
@@ -2785,7 +2785,7 @@ export default function ChatPage() {
                   disabled={busy}
                   rows={1}
                   aria-label="Message"
-                  placeholder="Message Iron Jarvis…  (Enter to send · Shift+Enter for a new line)"
+                  placeholder="Message Epic Tech AI…  (Enter to send · Shift+Enter for a new line)"
                   className="field max-h-40 min-h-[2.75rem] flex-1 resize-none disabled:opacity-60"
                 />
                 {awaiting && (

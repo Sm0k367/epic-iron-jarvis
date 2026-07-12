@@ -120,7 +120,9 @@ def register(app: FastAPI, d) -> None:
         return await d.platform.improvement.reflect(limit=limit)
 
     @app.get("/memory/search")
-    def memory_search(q: str, k: int = 5) -> dict[str, Any]:
+    def memory_search(q: str = "", k: int = 5) -> dict[str, Any]:
+        if not (q or "").strip():
+            return {"results": [], "query": q}
         hits = d.platform.memory.search(q, k=k)
         return {
             "results": [
@@ -131,7 +133,7 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/memory/recall")
     def memory_recall(
-        q: str,
+        q: str = "",
         k: int = 8,
         project_id: str | None = None,
         sources: str | None = None,
@@ -140,6 +142,8 @@ def register(app: FastAPI, d) -> None:
         files, notes (LTM), the memory graph, a project's knowledge, lessons,
         and past sessions — ranked + de-duplicated. ``sources`` optionally filters
         by a comma-separated subset (files,notes,memory,knowledge,lessons,sessions)."""
+        if not (q or "").strip():
+            return {"results": [], "by_source": {}, "count": 0, "query": q}
         fabric = getattr(d.platform, "fabric", None)
         if fabric is None:
             raise HTTPException(status_code=503, detail="memory fabric unavailable")

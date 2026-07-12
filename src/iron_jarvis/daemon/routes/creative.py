@@ -336,6 +336,9 @@ def register(app: FastAPI, d) -> None:
         (audio/SVG/no-ffmpeg): the UI falls back to the original or a glyph."""
         from ...creative.service import thumbnail_for
 
+        if not path.strip() and not name.strip():
+            # Bare GET: soft empty so explorers don't hard-fail.
+            return {"ok": False, "detail": "give path or name", "thumb": None}
         if bool(path.strip()) == bool(name.strip()):
             raise HTTPException(status_code=400, detail="give exactly one of path or name")
         if name.strip():
@@ -359,11 +362,14 @@ def register(app: FastAPI, d) -> None:
         return FileResponse(thumb, media_type="image/jpeg")
 
     @app.get("/creative/file-by-path")
-    def creative_file_by_path(path: str):
+    def creative_file_by_path(path: str = ""):
         """Serve a LOCAL media file (chat replies embed generated media by its
         absolute workspace path). Media extensions only + the fs policy guard —
         never a vault key or arbitrary file."""
-        p = Path((path or "").strip())
+        raw = (path or "").strip()
+        if not raw:
+            return {"ok": False, "detail": "path required"}
+        p = Path(raw)
         if not p.is_absolute():
             raise HTTPException(status_code=400, detail="absolute path required")
         if media_kind(p.name) is None:
@@ -404,6 +410,8 @@ def register(app: FastAPI, d) -> None:
         the UI show a 'Make playable' button only when the encoding needs it."""
         from ...creative.service import video_playability
 
+        if not path.strip() and not name.strip():
+            return {"playable": False, "detail": "give path or name", "ok": False}
         p = _resolve_media_source(name, path, version)
         return video_playability(p)
 
@@ -826,14 +834,18 @@ def register(app: FastAPI, d) -> None:
         }
 
     @app.get("/creative/studio-media")
-    def studio_media(path: str, depth: int = 3) -> dict[str, Any]:
+    def studio_media(path: str = "", depth: int = 3) -> dict[str, Any]:
         """Recursively list media files under a studio destination (bounded
         walk). The Studio's new-media watcher uses this instead of a flat
         /fs/list so generations saved into SUBFOLDERS (pixio-story's normal
         output layout) still appear in the conversation."""
         import os as _os
 
-        p = Path((path or "").strip())
+        raw = (path or "").strip()
+        if not raw:
+            return {"files": [], "path": "", "scanned": 0, "truncated": False, "ok": False,
+                    "detail": "path required"}
+        p = Path(raw)
         if not p.is_absolute():
             raise HTTPException(status_code=400, detail="absolute path required")
         ok, reason = fs_read_ok(str(p))

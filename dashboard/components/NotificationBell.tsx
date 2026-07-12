@@ -164,9 +164,9 @@ export function NotificationBell() {
     prevCount.current = count;
 
     if (count === 0) {
-      document.title = "Iron Jarvis";
+      document.title = "Epic Tech AI";
     } else {
-      document.title = `(${count}) Iron Jarvis`;
+      document.title = `(${count}) Epic Tech AI`;
     }
 
     if (count > prev) {
@@ -178,7 +178,7 @@ export function NotificationBell() {
           `${pendingApprovals} computer-use approval${pendingApprovals === 1 ? "" : "s"}`,
         );
       const body = parts.join(" · ") || "Something needs your attention.";
-      notify(`Iron Jarvis — ${count} pending`, body, () => setOpen(true));
+      notify(`Epic Tech AI — ${count} pending`, body, () => setOpen(true));
     }
   }, [count, reviews.length, pendingApprovals, notify]);
 

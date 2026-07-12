@@ -254,16 +254,30 @@ export function Empty({
   children,
   icon,
   action,
+  title,
+  body,
 }: {
-  children: ReactNode;
+  children?: ReactNode;
   icon?: ReactNode;
   /** Optional call-to-action link shown beneath the message. */
   action?: { label: string; href: string };
+  /** Optional title (credits/settings style). */
+  title?: string;
+  /** Optional body under title, or alone when title is omitted. */
+  body?: string;
 }) {
+  const content =
+    children ??
+    (title || body ? (
+      <div className="space-y-1">
+        {title ? <p className="font-medium text-zinc-300">{title}</p> : null}
+        {body ? <p className="text-zinc-500">{body}</p> : null}
+      </div>
+    ) : null);
   return (
     <div className="flex flex-col items-center justify-center gap-3 py-10 text-center">
       {icon && <div className="text-zinc-600">{icon}</div>}
-      <div className="max-w-sm text-sm text-zinc-500">{children}</div>
+      <div className="max-w-sm text-sm text-zinc-500">{content}</div>
       {action && (
         <Link
           href={action.href}

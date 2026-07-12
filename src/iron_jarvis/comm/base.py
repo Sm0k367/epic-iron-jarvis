@@ -66,9 +66,10 @@ def httpx_post(url: str, payload: dict[str, Any]) -> Any:
     """
     import httpx
 
-    # Short connect timeout so an unreachable/offline destination fails fast
-    # (~2s) instead of stalling its worker thread for the full window.
-    return httpx.post(url, json=payload, timeout=httpx.Timeout(15.0, connect=2.0))
+    # Connect was 2s — too tight for Telegram TLS on some Windows networks
+    # (channel test hit ConnectTimeout). 10s connect / 30s overall still fails
+    # offline reasonably fast without false timeouts.
+    return httpx.post(url, json=payload, timeout=httpx.Timeout(30.0, connect=10.0))
 
 
 def httpx_get(url: str, params: dict[str, Any]) -> Any:
@@ -84,7 +85,7 @@ def httpx_get(url: str, params: dict[str, Any]) -> Any:
     return httpx.get(
         url,
         params=params,
-        timeout=httpx.Timeout(server_timeout + 15.0, connect=2.0),
+        timeout=httpx.Timeout(server_timeout + 30.0, connect=10.0),
     )
 
 

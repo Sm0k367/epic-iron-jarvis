@@ -6,6 +6,8 @@ reached through ``d`` (see the deps object built in create_app).
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi import FastAPI, HTTPException
 from sqlmodel import select
 from typing import Any
@@ -165,17 +167,28 @@ def register(app: FastAPI, d) -> None:
         }
 
     @app.get("/documents/read")
-    def documents_read(path: str) -> dict[str, Any]:
+    def documents_read(path: str = "") -> dict[str, Any]:
         from ...documents import extract_text
 
-        ok, reason = fs_read_ok(path)
+        raw = (path or "").strip()
+        if not raw:
+            return {"path": "", "text": "", "ok": False, "detail": "path required"}
+        # Relative paths resolve under the platform documents dir (same as write).
+        p = Path(raw)
+        if not p.is_absolute():
+            base = (d.platform.config.home / "documents").resolve()
+            p = (base / raw).resolve()
+            if p != base and not p.is_relative_to(base):
+                raise HTTPException(status_code=400, detail="path escapes documents dir")
+            raw = str(p)
+        ok, reason = fs_read_ok(raw)
         if not ok:
             raise HTTPException(status_code=403, detail=reason)
         try:
-            text = extract_text(path)
+            text = extract_text(raw)
         except Exception as exc:  # noqa: BLE001
             raise HTTPException(status_code=400, detail=f"cannot read: {exc}")
-        return {"path": path, "text": text[:20000]}
+        return {"path": raw, "text": text[:20000], "ok": True}
 
     @app.post("/documents/write")
     def documents_write(body: DocWriteBody) -> dict[str, Any]:

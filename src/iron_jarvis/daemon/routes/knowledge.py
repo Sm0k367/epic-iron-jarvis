@@ -89,8 +89,11 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/filesearch")
     def filesearch(
-        q: str, mode: str = "content", limit: int = 50, root: str | None = None
+        q: str = "", mode: str = "content", limit: int = 50, root: str | None = None
     ) -> dict[str, Any]:
+        # Empty query is a no-op (200) so explorers / health sweeps don't 422.
+        if not (q or "").strip():
+            return {"results": [], "query": q}
         if root:
             ok, reason = fs_read_ok(root)
             if not ok:
@@ -107,7 +110,9 @@ def register(app: FastAPI, d) -> None:
         return {"results": results}
 
     @app.get("/ltm/search")
-    def ltm_search(q: str, source: str | None = None, k: int = 5) -> dict[str, Any]:
+    def ltm_search(q: str = "", source: str | None = None, k: int = 5) -> dict[str, Any]:
+        if not (q or "").strip():
+            return {"results": [], "query": q}
         try:
             return {"results": d.platform.ltm.search(q, k=k, source=source)}
         except ValueError as exc:

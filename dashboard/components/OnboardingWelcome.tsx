@@ -89,7 +89,7 @@ export function OnboardingWelcome() {
             </span>
             <div>
               <h2 className="text-lg font-semibold tracking-tight text-zinc-50">
-                {data.first_run ? "Welcome to Iron Jarvis" : "Finish setting up"}
+                {data.first_run ? "Welcome to Epic Tech AI" : "Finish setting up"}
               </h2>
               <p className="text-sm text-zinc-400">
                 A few quick steps to get the most out of your local AI operating system.

@@ -60,33 +60,36 @@ def register(app: FastAPI, d) -> None:
 
     @app.get("/fs/list")
     def fs_list(
-        path: str, show_hidden: bool = False, dirs_only: bool = False
+        path: str = "", show_hidden: bool = False, dirs_only: bool = False
     ) -> dict[str, Any]:
-        from ...fsbrowser import list_dir
+        from ...fsbrowser import home, list_dir
 
-        ok, reason = fs_read_ok(path)
+        # Default to the user's home when path is omitted (no 422 on bare GET).
+        target = (path or "").strip() or home()
+        ok, reason = fs_read_ok(target)
         if not ok:
             raise HTTPException(status_code=403, detail=reason)
         try:
-            return list_dir(path, show_hidden=show_hidden, dirs_only=dirs_only)
+            return list_dir(target, show_hidden=show_hidden, dirs_only=dirs_only)
         except (FileNotFoundError, NotADirectoryError) as exc:
             raise HTTPException(status_code=404, detail=str(exc))
 
     @app.get("/fs/files")
     def fs_files(
-        path: str, depth: int = 4, limit: int = 600, show_hidden: bool = False
+        path: str = "", depth: int = 4, limit: int = 600, show_hidden: bool = False
     ) -> dict[str, Any]:
         """Every FILE under ``path`` (recursive, bounded), NEWEST FIRST — powers
         the Build page's live files panel so a CLI's freshly-created files show at
         the top. Skips heavy/noise dirs (node_modules/.git/…)."""
-        from ...fsbrowser import list_files_recursive
+        from ...fsbrowser import home, list_files_recursive
 
-        ok, reason = fs_read_ok(path)
+        target = (path or "").strip() or home()
+        ok, reason = fs_read_ok(target)
         if not ok:
             raise HTTPException(status_code=403, detail=reason)
         try:
             return list_files_recursive(
-                path, depth=depth, limit=limit, show_hidden=show_hidden
+                target, depth=depth, limit=limit, show_hidden=show_hidden
             )
         except (FileNotFoundError, NotADirectoryError) as exc:
             raise HTTPException(status_code=404, detail=str(exc))
