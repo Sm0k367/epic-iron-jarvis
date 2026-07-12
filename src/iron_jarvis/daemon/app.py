@@ -616,16 +616,27 @@ def create_app(project_root: str | None = None) -> FastAPI:
         ):
 
             async def _inbound_loop() -> None:
-                # 15s default (was 3s): a 3s short-poll is ~28,800 round-trips/day that
-                # keep a laptop's event loop from idling; 15s stays responsive for an
-                # inbound message while cutting idle wakeups ~5x. Override for faster.
+                # Default 3s for snappy Telegram UX (override via IRONJARVIS_INBOUND_INTERVAL).
                 try:
                     interval = max(
-                        1, int(os.environ.get("IRONJARVIS_INBOUND_INTERVAL", "15"))
+                        1, int(os.environ.get("IRONJARVIS_INBOUND_INTERVAL", "3"))
                     )
                 except ValueError:
-                    interval = 15
-                await asyncio.sleep(20)  # let boot settle before the first poll
+                    interval = 3
+                # Short settle so the bot answers quickly after boot (was 20s).
+                try:
+                    settle = max(
+                        0, int(os.environ.get("IRONJARVIS_INBOUND_SETTLE", "2"))
+                    )
+                except ValueError:
+                    settle = 2
+                log.info(
+                    "inbound poller armed (interval=%ss settle=%ss channels=%s)",
+                    interval,
+                    settle,
+                    [n for n, _ in inbound_poller.inbound_channels()],
+                )
+                await asyncio.sleep(settle)
                 while True:
                     try:
                         await inbound_poller.poll_once()

@@ -145,9 +145,20 @@ class InboundPoller:
                     self._set_offset(name, offset)
                 try:
                     res = await self._handle(name, ch, msg)
-                except Exception:  # noqa: BLE001 — keep processing the batch
+                except Exception as exc:  # noqa: BLE001 — keep processing the batch
                     log.exception("inbound handling failed on channel %r", name)
-                    res = {"channel": name, "status": "error"}
+                    # Always tell the user something went wrong (don't fail silent).
+                    try:
+                        err_body = (
+                            f"{self.reply_prefix}Sorry — I hit an error "
+                            f"({type(exc).__name__}). Try again in a moment."
+                        )[: self.max_reply_chars]
+                        await asyncio.to_thread(
+                            ch.send, err_body, chat_id=msg.reply_to
+                        )
+                    except Exception:  # noqa: BLE001
+                        log.exception("inbound error reply failed")
+                    res = {"channel": name, "status": "error", "error": type(exc).__name__}
                 results.append(res)
             # Some channels report a high-water offset even with no text messages
             # (e.g. only non-text updates); persist it so we don't refetch them.
