@@ -1,0 +1,86 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Epic Tech AI — Soundtrack</title>
+  <style>
+    :root {
+      --bg: #0b0f14;
+      --card: #121821;
+      --text: #e8eef7;
+      --muted: #8b9bb4;
+      --accent: #3dd6c6;
+      --border: #1e2a3a;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+      background: radial-gradient(1200px 600px at 20% -10%, #163040 0%, transparent 55%),
+                  radial-gradient(900px 500px at 100% 0%, #1a1430 0%, transparent 50%),
+                  var(--bg);
+      color: var(--text);
+      padding: 2.5rem 1.25rem 3rem;
+    }
+    main { max-width: 720px; margin: 0 auto; }
+    h1 {
+      font-size: 1.6rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      margin: 0 0 0.35rem;
+    }
+    .sub { color: var(--muted); margin: 0 0 1.75rem; line-height: 1.5; }
+    .track {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 14px;
+      padding: 1.15rem 1.25rem 1.25rem;
+      margin-bottom: 1rem;
+    }
+    .track h2 {
+      font-size: 1.05rem;
+      margin: 0 0 0.25rem;
+      font-weight: 600;
+    }
+    .meta { color: var(--muted); font-size: 0.88rem; margin: 0 0 0.85rem; }
+    audio { width: 100%; height: 40px; }
+    a { color: var(--accent); }
+    footer {
+      margin-top: 1.5rem;
+      color: var(--muted);
+      font-size: 0.85rem;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Epic Tech AI — Soundtrack</h1>
+    <p class="sub">Brand / demo tracks. Use the players below or open the MP3 files directly on GitHub.</p>
+
+    <section class="track">
+      <h2>1 · EDM instrumental</h2>
+      <p class="meta">~3:30 · instrumental electronic / club · ~128 BPM</p>
+      <audio controls preload="metadata">
+        <source src="epic-tech-ai-edm-instrumental.mp3" type="audio/mpeg" />
+        Your browser does not support audio. <a href="epic-tech-ai-edm-instrumental.mp3">Download MP3</a>
+      </audio>
+    </section>
+
+    <section class="track">
+      <h2>2 · Dale club hook</h2>
+      <p class="meta">~3:18 · electronic / house · vocal hook “Dale, le le le…”</p>
+      <audio controls preload="metadata">
+        <source src="epic-tech-ai-dale-club.mp3" type="audio/mpeg" />
+        Your browser does not support audio. <a href="epic-tech-ai-dale-club.mp3">Download MP3</a>
+      </audio>
+    </section>
+
+    <footer>
+      <a href="../../README.md">← Back to README</a>
+      · Epic Tech AI · epictechai@gmail.com
+    </footer>
+  </main>
+</body>
+</html>
