@@ -42,6 +42,7 @@ import {
   Menu,
   X,
   Scale,
+  Coins,
   type LucideIcon,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
@@ -116,6 +117,7 @@ const NAV: NavSection[] = [
     label: "System",
     items: [
       { href: "/usage", label: "Usage", icon: BarChart3 },
+      { href: "/credits", label: "Credits", icon: Coins },
       { href: "/updates", label: "Updates", icon: DownloadCloud },
       { href: "/settings", label: "Settings", icon: Settings },
       { href: "/legal", label: "Legal", icon: Scale },
@@ -140,6 +142,8 @@ const ESSENTIAL_HREFS = new Set<string>([
   "/creative", // Creative — see what Iron Jarvis makes
   "/memory", // Memory (the one unified surface)
   "/connections", // Connections
+  "/usage", // spend awareness
+  "/credits", // credits + budgets
   "/settings", // Settings
   "/legal", // Legal / privacy / terms
   "/help", // Help

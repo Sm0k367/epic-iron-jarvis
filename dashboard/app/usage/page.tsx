@@ -10,6 +10,7 @@ import {
   CalendarDays,
   RefreshCw,
 } from "lucide-react";
+import Link from "next/link";
 import { useApi, usePolledApi } from "@/lib/useApi";
 import {
   Card,
@@ -236,6 +237,20 @@ export default function UsagePage() {
     reloadYear();
   };
 
+  const { data: billing } = usePolledApi<{
+    balance: number;
+    currency: string;
+    enabled: boolean;
+    budgets?: {
+      stats: { tokens_24h: number; usd_24h: number; runs_1h: number };
+      remaining: {
+        tokens_24h: number | null;
+        usd_24h: number | null;
+        runs_1h: number | null;
+      };
+    };
+  }>("/billing", 20000);
+
   const offline = error && error.status === 0;
   const totals = data?.totals;
   const byDay = useMemo(() => data?.by_day ?? [], [data]);
@@ -268,9 +283,15 @@ export default function UsagePage() {
       <Reveal>
         <PageHeader
           title="Usage"
-          subtitle="Token spend and run volume across your providers."
+          subtitle="Token spend, run volume, and live budget headroom across providers."
           actions={
             <div className="flex items-center gap-2">
+              <Link
+                href="/credits"
+                className="btn-ghost py-1.5 text-xs text-accent-soft"
+              >
+                <Coins size={14} /> Credits
+              </Link>
               <button
                 type="button"
                 onClick={refresh}
@@ -314,6 +335,46 @@ export default function UsagePage() {
       {error && !offline && (
         <Reveal>
           <ErrorNote>{error.message}</ErrorNote>
+        </Reveal>
+      )}
+
+      {billing && (
+        <Reveal>
+          <Card className="flex flex-col gap-3 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex flex-wrap gap-4 text-sm">
+              <span className="text-zinc-400">
+                Credits:{" "}
+                <strong className="text-zinc-100">
+                  {billing.balance.toFixed(2)} {billing.currency}
+                </strong>
+                {!billing.enabled && (
+                  <span className="ml-1 text-xs text-zinc-600">(billing off)</span>
+                )}
+              </span>
+              {billing.budgets?.stats && (
+                <>
+                  <span className="text-zinc-500">
+                    24h tokens:{" "}
+                    <strong className="text-zinc-300">
+                      {billing.budgets.stats.tokens_24h.toLocaleString()}
+                    </strong>
+                  </span>
+                  <span className="text-zinc-500">
+                    1h runs:{" "}
+                    <strong className="text-zinc-300">
+                      {billing.budgets.stats.runs_1h}
+                    </strong>
+                  </span>
+                </>
+              )}
+            </div>
+            <Link
+              href="/credits"
+              className="text-xs font-medium text-accent-soft hover:text-accent"
+            >
+              Manage credits →
+            </Link>
+          </Card>
         </Reveal>
       )}
 

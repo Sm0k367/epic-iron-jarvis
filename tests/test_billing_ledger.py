@@ -83,6 +83,50 @@ def test_no_secrets_in_summary(billing: BillingService):
         assert "sk_" not in str(p)
 
 
+def test_budget_status_remaining(billing: BillingService):
+    billing.record_session_usage(
+        session_id="s-budget",
+        provider="openai",
+        model="gpt-4o-mini",
+        input_tokens=1000,
+        output_tokens=1000,
+    )
+    status = billing.budget_status(
+        max_tokens_per_day=1_000_000,
+        max_usd_per_day=10.0,
+        max_runs_per_hour=50,
+        max_tokens_per_run=0,
+    )
+    assert status["stats"]["runs_24h"] >= 1
+    assert status["remaining"]["tokens_24h"] is not None
+    assert status["remaining"]["tokens_24h"] < 1_000_000
+
+
+def test_preflight_blocks_when_require_credits(engine):
+    from types import SimpleNamespace
+
+    from iron_jarvis.billing.guard import preflight_session
+
+    b = BillingService(engine, enabled=True, require_credits=True, min_credits=10.0)
+    platform = SimpleNamespace(
+        billing=b,
+        config=SimpleNamespace(
+            default_provider="anthropic",
+            max_tokens_per_day=0,
+            max_usd_per_day=0,
+            max_runs_per_hour=0,
+        ),
+    )
+    try:
+        preflight_session(platform, "anthropic")
+        assert False, "expected ValueError"
+    except ValueError as exc:
+        assert str(exc).startswith("402:")
+    b.grant(100.0)
+    preflight_session(platform, "anthropic")  # no raise
+    preflight_session(platform, "mock")  # free path
+
+
 @pytest.mark.asyncio
 async def test_reflex_balance_command(billing: BillingService, engine):
     from types import SimpleNamespace

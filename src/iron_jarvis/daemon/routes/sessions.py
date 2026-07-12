@@ -18,8 +18,28 @@ from ..schemas import ContinueBody, FeedbackBody, SessionCreate, SessionsClearBo
 
 def register(app: FastAPI, d) -> None:
     """Attach these routes to *app*; ``d`` is the create_app deps object."""
+
+    def _preflight(provider: str | None) -> None:
+        from ...billing.guard import preflight_session, raise_http
+
+        try:
+            preflight_session(d.platform, provider)
+        except ValueError as exc:
+            raise_http(exc)
+
+    def _meter(session: Any) -> None:
+        from ...billing.guard import meter_session
+
+        meter_session(d.platform, session)
+
+    async def _run_and_meter(session_id: str):
+        session = await d.orchestrator.run_session(session_id)
+        _meter(session)
+        return session
+
     @app.post("/sessions")
     async def create_session(body: SessionCreate) -> dict[str, Any]:
+        _preflight(body.provider)
         try:
             session = await d.orchestrator.create_session(
                 body.task,
@@ -33,9 +53,9 @@ def register(app: FastAPI, d) -> None:
         except (PermissionError, RuntimeError) as exc:  # self-dev gating
             raise HTTPException(status_code=400, detail=str(exc))
         if body.wait:
-            session = await d.orchestrator.run_session(session.id)
+            session = await _run_and_meter(session.id)
         else:
-            d._spawn_bg(session.id, d.orchestrator.run_session(session.id))
+            d._spawn_bg(session.id, _run_and_meter(session.id))
         return _session_view(session)
 
     @app.post("/sessions/{session_id}/cancel")
@@ -50,6 +70,8 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/sessions/{session_id}/rerun")
     async def rerun_session(session_id: str, wait: bool = True) -> dict[str, Any]:
+        prior = d.orchestrator.get_session(session_id)
+        _preflight(getattr(prior, "provider", None) if prior else None)
         try:
             session = await d.orchestrator.rerun_session(session_id)
         except KeyError:
@@ -57,23 +79,25 @@ def register(app: FastAPI, d) -> None:
         except (PermissionError, RuntimeError) as exc:  # self-dev gating on a maintainer rerun
             raise HTTPException(status_code=400, detail=str(exc))
         if wait:
-            session = await d.orchestrator.run_session(session.id)
+            session = await _run_and_meter(session.id)
         else:
-            d._spawn_bg(session.id, d.orchestrator.run_session(session.id))
+            d._spawn_bg(session.id, _run_and_meter(session.id))
         return _session_view(session)
 
     @app.post("/sessions/{session_id}/continue")
     async def continue_session(session_id: str, body: ContinueBody) -> dict[str, Any]:
+        prior = d.orchestrator.get_session(session_id)
+        _preflight(getattr(prior, "provider", None) if prior else None)
         try:
             session = await d.orchestrator.continue_session(session_id, body.message)
         except KeyError:
             raise HTTPException(status_code=404, detail="session not found")
         except ValueError as exc:  # workspace busy — a continuation is running
             raise HTTPException(status_code=409, detail=str(exc))
-        if body.wait:
-            session = await d.orchestrator.run_session(session.id)
+        if wait := body.wait:
+            session = await _run_and_meter(session.id)
         else:
-            d._spawn_bg(session.id, d.orchestrator.run_session(session.id))
+            d._spawn_bg(session.id, _run_and_meter(session.id))
         return _session_view(session)
 
     @app.post("/sessions/clear")

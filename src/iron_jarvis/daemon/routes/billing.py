@@ -39,7 +39,8 @@ def register(app: FastAPI, d: Any) -> None:
 
     @app.get("/billing")
     def billing_summary() -> dict[str, Any]:
-        return _billing().summary()
+        # Include budget remaining when config is available (dashboard strip).
+        return _billing().summary(config=getattr(platform, "config", None))
 
     @app.get("/billing/ledger")
     def billing_ledger(limit: int = 50) -> dict[str, Any]:

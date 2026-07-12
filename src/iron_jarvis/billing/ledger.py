@@ -532,9 +532,62 @@ class BillingService:
             "balance": entry.balance_after,
         }
 
-    def summary(self) -> dict[str, Any]:
-        w = self.default_wallet()
+    def usage_window_stats(self) -> dict[str, Any]:
+        """Rolling 24h / 1h meters for budget UI (no secrets)."""
+        now = utcnow()
+        day_ago = now - timedelta(days=1)
+        hour_ago = now - timedelta(hours=1)
+        with session_scope(self.engine) as db:
+            day_rows = db.exec(
+                select(UsageMeterRecord).where(UsageMeterRecord.created_at >= day_ago)
+            ).all()
+            hour_rows = db.exec(
+                select(UsageMeterRecord).where(UsageMeterRecord.created_at >= hour_ago)
+            ).all()
+        day_tokens = sum(int(r.input_tokens or 0) + int(r.output_tokens or 0) for r in day_rows)
+        day_usd = sum(float(r.estimated_usd or 0) for r in day_rows)
+        day_credits = sum(float(r.credits_burned or 0) for r in day_rows)
         return {
+            "tokens_24h": day_tokens,
+            "usd_24h": round(day_usd, 6),
+            "credits_burned_24h": round(day_credits, 4),
+            "runs_1h": len(hour_rows),
+            "runs_24h": len(day_rows),
+        }
+
+    def budget_status(
+        self,
+        *,
+        max_tokens_per_day: int = 0,
+        max_usd_per_day: float = 0.0,
+        max_runs_per_hour: int = 0,
+        max_tokens_per_run: int = 0,
+    ) -> dict[str, Any]:
+        """Remaining budget snapshot for dashboard / preflight."""
+        stats = self.usage_window_stats()
+        def rem(limit: float, used: float) -> float | None:
+            if not limit:
+                return None
+            return max(0.0, float(limit) - float(used))
+
+        return {
+            "stats": stats,
+            "limits": {
+                "max_tokens_per_day": max_tokens_per_day,
+                "max_usd_per_day": max_usd_per_day,
+                "max_runs_per_hour": max_runs_per_hour,
+                "max_tokens_per_run": max_tokens_per_run,
+            },
+            "remaining": {
+                "tokens_24h": rem(max_tokens_per_day, stats["tokens_24h"]),
+                "usd_24h": rem(max_usd_per_day, stats["usd_24h"]),
+                "runs_1h": rem(max_runs_per_hour, stats["runs_1h"]),
+            },
+        }
+
+    def summary(self, *, config: Any = None) -> dict[str, Any]:
+        w = self.default_wallet()
+        out: dict[str, Any] = {
             "enabled": self.enabled,
             "require_credits": self.require_credits,
             "min_credits": self.min_credits,
@@ -545,6 +598,16 @@ class BillingService:
             "products": self.list_products(),
             # Never include secret material.
         }
+        if config is not None:
+            out["budgets"] = self.budget_status(
+                max_tokens_per_day=int(getattr(config, "max_tokens_per_day", 0) or 0),
+                max_usd_per_day=float(getattr(config, "max_usd_per_day", 0) or 0),
+                max_runs_per_hour=int(getattr(config, "max_runs_per_hour", 0) or 0),
+                max_tokens_per_run=int(getattr(config, "max_tokens_per_run", 0) or 0),
+            )
+        else:
+            out["stats"] = self.usage_window_stats()
+        return out
 
     def ensure_subscription(self, plan_id: str = "free", *, wallet_id: str | None = None) -> dict[str, Any]:
         wid = wallet_id or self.default_wallet().id

@@ -42,6 +42,7 @@ import {
   Scale,
   Shield,
   FileText,
+  Coins,
   type LucideIcon,
 } from "lucide-react";
 
@@ -94,6 +95,7 @@ const COMMANDS: Command[] = [
   { id: "integrations", label: "Integrations", hint: "Connections", icon: Plug, href: "/integrations", keywords: "services connect" },
   { id: "channels", label: "Channels", hint: "Connections", icon: Megaphone, href: "/channels", keywords: "slack telegram discord notify" },
   { id: "usage", label: "Usage", hint: "System", icon: BarChart3, href: "/usage", keywords: "tokens cost spend analytics" },
+  { id: "credits", label: "Credits & budgets", hint: "System", icon: Coins, href: "/credits", keywords: "billing stripe ledger grant pack budget spend" },
   { id: "updates", label: "Updates", hint: "System", icon: DownloadCloud, href: "/updates", keywords: "version upgrade release" },
   { id: "settings", label: "Settings", hint: "System", icon: Settings, href: "/settings", keywords: "config preferences" },
   { id: "legal", label: "Legal hub", hint: "System", icon: Scale, href: "/legal", keywords: "privacy terms policy license aup billing cookies whitepaper" },
