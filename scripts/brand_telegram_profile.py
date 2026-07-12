@@ -96,10 +96,10 @@ def main() -> int:
 
     description = (
         f"{PRODUCT_NAME} — {PRODUCT_TAGLINE} "
-        f"Message me tasks, /status, /run workflows, /balance. "
-        f"Contact {CONTACT_EMAIL} · {CONTACT_X_HANDLE}"
+        f"DM tasks, generate images, or send a photo + 'make a video of this'. "
+        f"/status · /run · /balance. Contact {CONTACT_EMAIL} · {CONTACT_X_HANDLE}"
     )
-    short = f"{PRODUCT_NAME} · local-first AI OS · agents & workflows"
+    short = f"{PRODUCT_NAME} · agents, media & workflows"
 
     jobs: list[tuple[str, dict]] = [
         ("setMyName", {"name": TELEGRAM_BOT_DISPLAY_NAME}),

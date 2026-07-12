@@ -1,11 +1,14 @@
 # Start Epic Tech AI daemon with Telegram inbound (always-on for @EpicTechAI_bot)
 # Usage: powershell -ExecutionPolicy Bypass -File scripts\start-epic-bot.ps1
+#
+# Prefer scripts\refresh_telegram_bot.ps1 after a git pull to rewire channel + brand.
+# This script only starts the daemon (loads .env + vault-friendly env).
 
 $ErrorActionPreference = "Stop"
 $Root = Split-Path -Parent (Split-Path -Parent $MyInvocation.MyCommand.Path)
 Set-Location $Root
 
-$env:Path = "$env:USERPROFILE\.local\bin;$env:Path"
+$env:Path = "$env:USERPROFILE\.local\bin;$env:LOCALAPPDATA\uv\bin;$env:Path"
 $env:IRONJARVIS_HOME = Join-Path $Root ".ironjarvis"
 $env:IRONJARVIS_INBOUND = "on"
 $env:IRONJARVIS_INBOUND_INTERVAL = "3"
@@ -36,9 +39,10 @@ foreach ($c in (netstat -ano | Select-String "LISTENING" | Select-String ":8787"
 }
 Start-Sleep -Seconds 1
 
-Write-Host "Epic Tech AI daemon + Telegram @EpicTechAI_bot"
+Write-Host "Epic Tech AI daemon + Telegram inbound"
 Write-Host "  home: $env:IRONJARVIS_HOME"
 Write-Host "  http://127.0.0.1:8787"
+Write-Host "  Media: text generate / photo+caption video"
 Write-Host "  Keep this window open (or run minimized)."
 
 & uv run ironjarvis serve --host 127.0.0.1 --port 8787

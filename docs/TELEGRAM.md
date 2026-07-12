@@ -13,11 +13,25 @@ Drive the platform from your phone: commands, workflows, sessions, credits.
 
 You choose the username when creating the bot with **@BotFather**. The software brand is always **Epic Tech AI**.
 
+## Refresh bot (after git pull / media fixes)
+
+On Windows, from the repo root (with `TELEGRAM_BOT_TOKEN` + `PIXIO_API_KEY` in `.env`):
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\refresh_telegram_bot.ps1
+```
+
+That will: `git pull` → vault load → configure inbound channel → brand profile →
+restart the daemon with inbound on. Keep the window open.
+
+Photo → video: send a still with caption `make a video of this` (or photo only).
+
 ## Prerequisites
 
-1. Epic Tech AI daemon running (`uv run ironjarvis up` or desktop app / tray)
+1. Epic Tech AI daemon running (`uv run ironjarvis up`, `scripts\start-epic-bot.ps1`, or desktop)
 2. A Telegram account
 3. Your numeric Telegram user id (for the allowlist)
+4. **Pixio** key in vault (`pixio` / `PIXIO_API_KEY`) for media generation
 
 ## Step-by-step
 
