@@ -41,6 +41,7 @@ import {
   SlidersHorizontal,
   Menu,
   X,
+  Scale,
   type LucideIcon,
 } from "lucide-react";
 import { API_BASE } from "@/lib/api";
@@ -117,6 +118,7 @@ const NAV: NavSection[] = [
       { href: "/usage", label: "Usage", icon: BarChart3 },
       { href: "/updates", label: "Updates", icon: DownloadCloud },
       { href: "/settings", label: "Settings", icon: Settings },
+      { href: "/legal", label: "Legal", icon: Scale },
       { href: "/help", label: "Help", icon: LifeBuoy },
     ],
   },
@@ -139,6 +141,7 @@ const ESSENTIAL_HREFS = new Set<string>([
   "/memory", // Memory (the one unified surface)
   "/connections", // Connections
   "/settings", // Settings
+  "/legal", // Legal / privacy / terms
   "/help", // Help
 ]);
 

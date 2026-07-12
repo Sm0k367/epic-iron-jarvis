@@ -13,6 +13,12 @@ Start at the repo root **[README](../README.md)** for product documentation.
 | [SIGNING.md](SIGNING.md) | Code-signing the Windows installer |
 | [COMPUTER-USE.md](COMPUTER-USE.md) | Computer-use safety mapping |
 
+## Legal & whitepages
+
+See **[../legal/](../legal/)** for Privacy, Terms, AUP, Billing, Cookies, Security, Copyright/DMCA, Whitepaper, Contact, plus root [LICENSE](../LICENSE), [NOTICE](../NOTICE), [SECURITY.md](../SECURITY.md).
+
+In the dashboard: **System → Legal** (`/legal`).
+
 ## Historical plans & audits
 
 | File | What it is |

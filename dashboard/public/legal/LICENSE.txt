@@ -1,0 +1,21 @@
+Copyright (c) 2025–2026 Epic Tech AI. All Rights Reserved.
+
+EPIC TECH AI — PROPRIETARY SOFTWARE LICENSE NOTICE
+
+This software and associated documentation files (the "Software") are the
+proprietary property of Epic Tech AI unless otherwise noted in NOTICE.
+
+Permission is granted to use the Software for lawful personal or internal
+business purposes, subject to the Terms of Service published in legal/TERMS.md
+and the Acceptable Use Policy in legal/ACCEPTABLE-USE.md.
+
+You may not sell, sublicense, or redistribute the Software as a competing
+hosted product under another brand without prior written permission from
+Epic Tech AI, except as allowed by third-party open source licenses for
+components listed in NOTICE.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED. SEE legal/TERMS.md FOR DISCLAIMERS AND LIMITATION OF LIABILITY.
+
+Contact: epictechai@gmail.com
+X: https://x.com/EpicTechAI

@@ -1,0 +1,36 @@
+Epic Tech AI
+Copyright (c) 2025–2026 Epic Tech AI. All Rights Reserved.
+Contact: epictechai@gmail.com · https://x.com/EpicTechAI
+
+================================================================================
+UPSTREAM / ATTRIBUTION
+================================================================================
+
+Portions of this project are derived from Iron Jarvis:
+
+  Project: Iron Jarvis
+  Upstream: https://github.com/RealDealCPA-VR/Iron-Jarvis
+  Credit: RealDealCPA-VR and contributors
+
+Epic Tech AI packaging, branding, billing, provider expansions, and legal
+documentation are original to Epic Tech AI except where third-party licenses
+apply below.
+
+================================================================================
+THIRD-PARTY OPEN SOURCE
+================================================================================
+
+This product bundles or depends on numerous open source packages (Python via
+uv/pyproject, Node via dashboard/package.json). Their licenses apply to those
+components as published by their authors. Run license audit tools against lock
+files for a complete inventory, for example:
+
+  uv export  /  pip-licenses
+  pnpm licenses list   (from dashboard/)
+
+Notable categories include (non-exhaustive): FastAPI, Starlette, Uvicorn,
+Pydantic, SQLAlchemy, SQLModel, Next.js, React, Electron, Stripe SDK, and
+other libraries declared in project manifests.
+
+Nothing in this NOTICE grants rights beyond those licenses or the Epic Tech AI
+LICENSE file.

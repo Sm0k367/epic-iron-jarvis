@@ -284,6 +284,28 @@ uv run pytest -q
 | [DEPLOY.md](DEPLOY.md) | Server deploy |
 | [CLAUDE.md](CLAUDE.md) / [AGENTS.md](AGENTS.md) | Agent operating notes |
 
+## ⚖️ Legal, privacy & whitepages
+
+Full policy pack lives in **[`legal/`](legal/)** and in the dashboard at **`/legal`**.
+
+| Document | Repo | In-app |
+|----------|------|--------|
+| Privacy Policy | [legal/PRIVACY.md](legal/PRIVACY.md) | `/legal/privacy` |
+| Terms of Service | [legal/TERMS.md](legal/TERMS.md) | `/legal/terms` |
+| Acceptable Use | [legal/ACCEPTABLE-USE.md](legal/ACCEPTABLE-USE.md) | `/legal/acceptable-use` |
+| Billing & Refunds | [legal/BILLING.md](legal/BILLING.md) | `/legal/billing` |
+| Cookies & Storage | [legal/COOKIES.md](legal/COOKIES.md) | `/legal/cookies` |
+| Security Policy | [SECURITY.md](SECURITY.md) · [legal/SECURITY.md](legal/SECURITY.md) | `/legal/security` |
+| Copyright / DMCA | [legal/COPYRIGHT.md](legal/COPYRIGHT.md) | `/legal/copyright` |
+| Product Whitepaper | [legal/WHITEPAPER.md](legal/WHITEPAPER.md) | `/legal/whitepaper` |
+| Contact | [legal/CONTACT.md](legal/CONTACT.md) | `/legal/contact` |
+| License | [LICENSE](LICENSE) | `/legal/license` |
+| Third-party notices | [NOTICE](NOTICE) | — |
+
+**Contact:** [epictechai@gmail.com](mailto:epictechai@gmail.com) · [@EpicTechAI](https://x.com/EpicTechAI)
+
+*Policies are for transparency and operations; they are not personalized legal advice.*
+
 ---
 
 ## 🗺️ Contact & attribution
