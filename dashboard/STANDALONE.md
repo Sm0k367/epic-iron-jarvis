@@ -3,7 +3,7 @@
 The dashboard is configured for Next.js **standalone output** (`output: "standalone"`
 in `next.config.mjs`). This bundles a minimal self-contained Node server at
 `.next/standalone/server.js` together with a trimmed `node_modules`, so the
-dashboard runs with **NO separate Node/pnpm install at runtime** — Electron starts
+dashboard runs with **NO separate Node/npm install at runtime** — Electron starts
 it with its bundled Node.
 
 Standalone (not static export) is required because the app has one dynamic,
@@ -14,7 +14,7 @@ static build cannot serve.
 
 ```sh
 cd dashboard
-pnpm build
+npm run build
 ```
 
 Produces:
@@ -82,7 +82,7 @@ export const API_BASE = (process.env.NEXT_PUBLIC_IJ_API || "http://127.0.0.1:878
 
 - **`NEXT_PUBLIC_IJ_API` defaults to `http://127.0.0.1:8787`** (the bundled daemon).
 - **CAVEAT — baked at build time.** Any env var prefixed `NEXT_PUBLIC_*` is inlined
-  into the client bundle during `pnpm build`. Setting it at runtime has **no
+  into the client bundle during `npm run build`. Setting it at runtime has **no
   effect**; to point the dashboard at a different daemon URL you must rebuild.
   For the standard Electron packaging (daemon on `127.0.0.1:8787`) the default is
   correct and nothing needs to be set.
@@ -96,4 +96,4 @@ export const API_BASE = (process.env.NEXT_PUBLIC_IJ_API || "http://127.0.0.1:878
 - `.next/` is already gitignored (`/.next` in `dashboard/.gitignore`), so the build
   output is not committed.
 - `.npmrc` pins `node-linker=hoisted`, which keeps the standalone `node_modules`
-  flat — required for Next App Router production to work correctly under pnpm.
+  flat — required for Next App Router production to work correctly under npm.

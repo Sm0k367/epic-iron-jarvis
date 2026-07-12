@@ -42,7 +42,7 @@ def test_doctor_returns_ok_shape_with_python_ok():
 
     # The dashboard/voice checks exist and are non-fatal (recommended).
     names = {c["name"] for c in result["checks"]}
-    assert {"git", "node", "pnpm", "uv", "browser"} <= names
+    assert {"git", "node", "npm", "uv", "browser"} <= names
 
 
 # --- getting_started ------------------------------------------------------

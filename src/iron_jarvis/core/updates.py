@@ -1,9 +1,9 @@
 """Repo-based self-update (git).
 
-Iron Jarvis runs from its OWN git checkout (uv + pnpm). This module lets a user
+Iron Jarvis runs from its OWN git checkout (uv + npm). This module lets a user
 check for, and apply, updates that were pushed to the repo — pull the new source
 (``git pull --ff-only``), re-sync Python deps (``uv sync``) and rebuild the
-dashboard (``pnpm install && pnpm build``).
+dashboard (``npm install && npm run build``).
 
 Everything is dependency-injected: each git/build command goes through a
 ``runner`` callable that defaults to :data:`_subprocess_runner`. Tests inject a
@@ -42,7 +42,7 @@ def _subprocess_runner(cmd: list[str], cwd: Path) -> RunResult:
             cmd, cwd=str(cwd), capture_output=True, text=True, timeout=900
         )
         return RunResult(proc.returncode, proc.stdout or "", proc.stderr or "")
-    except FileNotFoundError as exc:  # e.g. git / uv / pnpm not on PATH
+    except FileNotFoundError as exc:  # e.g. git / uv / npm not on PATH
         return RunResult(127, "", str(exc))
     except Exception as exc:  # noqa: BLE001 - surface as a failed step, don't crash
         return RunResult(1, "", str(exc))
@@ -136,8 +136,8 @@ def apply_update(
     """Pull + rebuild this checkout SAFELY. Refuses on a dirty tree.
 
     Steps (each captured into ``log`` with its stdout/stderr): record the pre-pull
-    SHA → ``git pull --ff-only`` → ``uv sync --extra dev`` → (optionally) ``pnpm
-    install`` + ``pnpm build`` → (when ``run_tests``) ``uv run pytest -q`` as a
+    SHA → ``git pull --ff-only`` → ``uv sync --extra dev`` → (optionally) ``npm
+    install`` + ``npm run build`` → (when ``run_tests``) ``uv run pytest -q`` as a
     GATE. If ``uv sync`` or the test gate fails, the checkout is ROLLED BACK to the
     recorded pre-pull SHA (``git reset --hard`` + ``uv sync``) so a bad update can
     never leave the daily driver half-updated or unbootable.
@@ -225,10 +225,10 @@ def apply_update(
             return rollback("uv sync failed after pull", pre_sha)
 
         dash = repo_root / "dashboard"
-        if build_dashboard and dash.is_dir() and shutil.which("pnpm"):
-            ok_install, _ = step("pnpm install", ["pnpm", "install"], dash)
+        if build_dashboard and dash.is_dir() and shutil.which("npm"):
+            ok_install, _ = step("npm install", ["npm", "install"], dash)
             if ok_install:
-                step("pnpm build", ["pnpm", "build"], dash)
+                step("npm run build", ["npm", "run", "build"], dash)
 
         # Test GATE: the new code must pass its own suite before we declare success.
         # A returncode of 127 means the test runner itself is absent (e.g. uv not on

@@ -1,4 +1,4 @@
-# Iron Jarvis dashboard / cockpit (Next.js 15 + pnpm).
+# Iron Jarvis dashboard / cockpit (Next.js 15 + npm).
 #
 # Build context is the PROJECT ROOT (so docker-compose can find Dockerfile.dashboard);
 # only the dashboard/ subtree is copied in.
@@ -6,11 +6,6 @@
 # IMPORTANT: NEXT_PUBLIC_* values are inlined into the client bundle at BUILD time,
 # so NEXT_PUBLIC_IJ_API must be the BROWSER-reachable daemon URL and is baked here.
 FROM node:20-slim
-
-# pnpm via corepack. .npmrc (node-linker=hoisted) ships in dashboard/ and is
-# required so Next's App Router client works in a production build (no broken
-# pnpm symlinks).
-RUN corepack enable && corepack prepare pnpm@latest --activate
 
 WORKDIR /app
 
@@ -20,12 +15,12 @@ ARG NEXT_PUBLIC_IJ_API=http://localhost:8787
 ENV NEXT_PUBLIC_IJ_API=$NEXT_PUBLIC_IJ_API
 
 # Install deps first (cached unless manifests change).
-COPY dashboard/package.json dashboard/pnpm-lock.yaml dashboard/.npmrc ./
-RUN pnpm install
+COPY dashboard/package.json dashboard/package-lock.json ./
+RUN npm ci
 
 # Copy the rest of the dashboard and build.
 COPY dashboard/ ./
-RUN pnpm build
+RUN npm run build
 
 EXPOSE 3000
-CMD ["pnpm", "start"]
+CMD ["npm", "start"]

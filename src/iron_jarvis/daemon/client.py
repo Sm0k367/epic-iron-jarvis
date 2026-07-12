@@ -45,7 +45,7 @@ class DaemonClient:
         return httpx.get(f"{self.base_url}/update/check", timeout=30).json()
 
     def update_apply(self, build_dashboard: bool = True) -> dict[str, Any]:
-        # A pull + uv sync + pnpm build can take a while — generous timeout.
+        # A pull + uv sync + npm run build can take a while — generous timeout.
         return httpx.post(
             f"{self.base_url}/update/apply",
             json={"build_dashboard": build_dashboard},

@@ -14,5 +14,5 @@ NSIS installer. (You can also drop in a prebuilt `icon.ico` and point
 `build.win.icon` at it.)
 
 Nothing here fails the build if the icon is missing — Electron falls back to its
-default window icon — but keeping a valid PNG here means `pnpm dist` produces a
+default window icon — but keeping a valid PNG here means `npm run dist` produces a
 branded installer out of the box.

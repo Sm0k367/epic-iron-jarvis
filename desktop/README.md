@@ -26,11 +26,11 @@ desktop/
 On launch, `main.js`:
 
 1. Shows a dark **"Starting Iron Jarvis…"** splash window.
-2. Verifies `uv` and `pnpm` are on your `PATH` (friendly error dialog if not).
+2. Verifies `uv` and `npm` are on your `PATH` (friendly error dialog if not).
 3. Spawns the **daemon**:
    `uv run ironjarvis serve --host 127.0.0.1 --port 8787 --root <repoRoot>`
    (cwd = repo root, one directory above `desktop/`).
-4. Spawns the **dashboard**: `pnpm start` (cwd = `../dashboard`, `PORT` set from env).
+4. Spawns the **dashboard**: `npm start` (cwd = `../dashboard`, `PORT` set from env).
 5. Polls `http://127.0.0.1:3000` for up to ~30s until it answers.
 6. Opens the main **1440×900** window on `http://localhost:3000` and closes the splash.
 7. On quit, **kills both child processes** (`taskkill /T /F` on Windows) so nothing
@@ -43,29 +43,29 @@ browser. The app menu has reload / force-reload / toggle devtools / quit.
 
 This wrapper drives the existing repo tooling, so you need:
 
-- **Node 20** and **pnpm 10** (`npm i -g pnpm`)
+- **Node 20** and **npm** (ships with Node)
 - **uv** — the Python runner (<https://docs.astral.sh/uv/>)
 - The Python deps installable by uv (handled automatically by `uv run`)
 - **The dashboard built once** (Next.js `start` serves a *production* build):
 
   ```bash
   cd ../dashboard
-  pnpm install
-  pnpm build
+  npm install
+  npm run build
   ```
 
   If you skip this, the splash will time out and show a dialog telling you to run
-  `pnpm build`.
+  `npm run build`.
 
 ## Run
 
 ```bash
 cd desktop
-pnpm install      # installs Electron (downloads the Electron binary — expected)
-pnpm start        # boots the daemon + dashboard and opens the native window
+npm install      # installs Electron (downloads the Electron binary — expected)
+npm start        # boots the daemon + dashboard and opens the native window
 ```
 
-`pnpm dev` is an alias for `pnpm start`.
+`npm dev` is an alias for `npm start`.
 
 ### Configuration
 
@@ -77,21 +77,21 @@ pnpm start        # boots the daemon + dashboard and opens the native window
 Example:
 
 ```bash
-IJ_DAEMON_PORT=9001 IJ_DASHBOARD_PORT=3100 pnpm start
+IJ_DAEMON_PORT=9001 IJ_DASHBOARD_PORT=3100 npm start
 ```
 
 ## Packaging
 
 Build the SELF-CONTAINED Windows installer. The installed app needs **no Python /
-uv / Node / pnpm** — it bundles a PyInstaller-frozen daemon **and** the Next.js
+uv / Node / npm** — it bundles a PyInstaller-frozen daemon **and** the Next.js
 standalone dashboard:
 
 ```powershell
 cd desktop
-pnpm run dist:full   # build-installer.ps1: freeze daemon → build dashboard → NSIS installer in desktop/release/
+npm run dist:full   # build-installer.ps1: freeze daemon → build dashboard → NSIS installer in desktop/release/
 ```
 
-> **Use `dist:full`, not bare `pnpm dist`.** `pnpm dist` runs ONLY electron-builder
+> **Use `dist:full`, not bare `npm run dist`.** `npm run dist` runs ONLY electron-builder
 > — it does not freeze the daemon or build the dashboard, so it silently produces a
 > broken installer (electron-builder only *warns* on the missing `extraResources`).
 > `dist:full` (and CI via `.github/workflows/release.yml`) freezes the daemon,
@@ -109,7 +109,7 @@ The `electron-builder` config lives in `package.json` under `build`:
 ## Roadmap
 
 The app is already a true standalone install (frozen daemon + bundled dashboard;
-no repo, no global `uv`/`pnpm` required). Remaining:
+no repo, no global `uv`/`npm` required). Remaining:
 
 - **Code-sign** the installer + daemon to remove the SmartScreen "unknown
   publisher" warning on a fresh machine (needs an OV/EV cert or Azure Trusted
@@ -117,8 +117,8 @@ no repo, no global `uv`/`pnpm` required). Remaining:
 
 ## Troubleshooting
 
-- **"missing prerequisites" dialog** — install `uv` and/or `pnpm`, then relaunch.
+- **"missing prerequisites" dialog** — install `uv` and/or Node (npm), then relaunch.
 - **"dashboard did not start" dialog** — you almost certainly haven't built the
-  dashboard: `cd ../dashboard && pnpm install && pnpm build`. Watch the terminal
+  dashboard: `cd ../dashboard && npm install && npm run build`. Watch the terminal
   for `[daemon]` / `[dashboard]` logs.
 - **Port already in use** — set `IJ_DAEMON_PORT` / `IJ_DASHBOARD_PORT`.

@@ -25,13 +25,6 @@
     "electron": "^42.5.0",
     "electron-builder": "^26.15.6"
   },
-  "pnpm": {
-    "onlyBuiltDependencies": [
-      "electron",
-      "electron-builder",
-      "esbuild"
-    ]
-  },
   "build": {
     "appId": "com.epictechai.epicjarvis",
     "productName": "Epic Tech AI",

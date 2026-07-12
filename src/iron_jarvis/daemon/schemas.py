@@ -659,7 +659,7 @@ class SpawnBody(BaseModel):
 
 
 class UpdateBody(BaseModel):
-    # Whether to rebuild the dashboard (pnpm install && pnpm build) after pulling.
+    # Whether to rebuild the dashboard (npm install && npm run build) after pulling.
     build_dashboard: bool = True
 
 

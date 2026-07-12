@@ -45,7 +45,7 @@ flows through an **Event Bus**.
 | Concern | Choice | Why |
 |---|---|---|
 | Framework | Next.js 15 (App Router) | §4 dashboard |
-| ⚠️ Packaging | **`.npmrc` with `node-linker=hoisted` (pnpm)** | Known gotcha: pnpm symlinks crash Next App Router prod build; verify with a real Chrome prod build, not dev/curl |
+| ⚠️ Packaging | **npm (not pnpm)** | Prefer npm lockfile; verify with a real Chrome prod build, not dev/curl |
 | Data | TanStack Query + WebSocket client | REST queries + live event stream |
 | UI | Tailwind + shadcn/ui | Fast, consistent |
 

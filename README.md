@@ -21,7 +21,7 @@ No cloud lock-in. No black boxes. Every action logged, every secret encrypted at
 
 > **Core engine** is based on [Iron Jarvis](https://github.com/RealDealCPA-VR/Iron-Jarvis) (credit: RealDealCPA-VR). Product brand and commerce layer: **Epic Tech AI**.
 
-> **Platform:** Windows desktop installer + from-source on Windows/macOS/Linux (`uv` + `pnpm`).
+> **Platform:** Windows desktop installer + from-source on Windows/macOS/Linux (`uv` + `npm`).
 
 <div align="center">
 
@@ -86,20 +86,20 @@ Full policy: [`docs/TOKEN-POLICY.md`](docs/TOKEN-POLICY.md).
 
 ### 💻 From source (recommended for this fork)
 
-**Prerequisites:** Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 20+, [pnpm](https://pnpm.io/), git.
+**Prerequisites:** Python 3.12+, [uv](https://docs.astral.sh/uv/), Node 20+ (includes npm), git.
 
 ```powershell
 git clone https://github.com/Sm0k367/epic-iron-jarvis.git
 cd epic-iron-jarvis
 uv run ironjarvis doctor          # or: uv run epic doctor
 uv sync --extra dev
-cd dashboard; pnpm install; pnpm build; cd ..
+cd dashboard; npm install; npm run build; cd ..
 uv run ironjarvis up             # daemon :8787 + dashboard :3000
 ```
 
-Two terminals: `uv run ironjarvis serve` + `cd dashboard && pnpm start`.
+Two terminals: `uv run ironjarvis serve` + `cd dashboard && npm start`.
 
-Desktop window over source: `cd desktop && pnpm install && pnpm start`.
+Desktop window over source: `cd desktop && npm install && npm start`.
 
 ```powershell
 uv run ironjarvis demo           # offline end-to-end
@@ -113,7 +113,7 @@ CLI aliases: **`ironjarvis`** and **`epic`** (same app).
 Build from this repo:
 
 ```powershell
-pnpm --dir desktop run dist:full
+npm --prefix desktop run dist:full
 # → desktop/release/… Setup … .exe
 ```
 

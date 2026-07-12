@@ -1,6 +1,6 @@
 """Repo-based self-update (git) — offline, fully dependency-injected.
 
-A fake ``runner`` stands in for the real git/uv/pnpm commands, so these tests
+A fake ``runner`` stands in for the real git/uv/npm commands, so these tests
 exercise the whole update surface with NO real git, subprocess, or network.
 """
 
@@ -93,7 +93,7 @@ def test_apply_refuses_on_dirty_tree(tmp_path):
 
 def test_apply_runs_pull_and_sync_on_clean_tree(tmp_path):
     runner = make_runner(porcelain="")  # clean
-    # No dashboard/ dir in tmp_path, so the pnpm build step is skipped.
+    # No dashboard/ dir in tmp_path, so the npm build step is skipped.
     res = apply_update(tmp_path, runner=runner)
     assert res["ok"] is True
     assert res["restart_required"] is True

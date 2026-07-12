@@ -656,13 +656,13 @@ def up(
 
     procs = []
     dash = Path(root) / "dashboard"
-    if (dash / ".next").exists() and shutil.which("pnpm"):
+    if (dash / ".next").exists() and shutil.which("npm"):
         console.print("[cyan]Dashboard[/cyan] -> http://localhost:3000")
-        procs.append(subprocess.Popen("pnpm start", cwd=str(dash), shell=True))
+        procs.append(subprocess.Popen("npm start", cwd=str(dash), shell=True))
         url = "http://localhost:3000"
     else:
         console.print(
-            "[yellow]Dashboard not built[/yellow] (cd dashboard && pnpm install && pnpm build). Serving the API only."
+            "[yellow]Dashboard not built[/yellow] (cd dashboard && npm install && npm run build). Serving the API only."
         )
         url = f"http://{host}:{port}"
     console.print(f"[cyan]Daemon[/cyan]    -> http://{host}:{port}")
@@ -814,10 +814,10 @@ def update_check(root: str = typer.Option(".", help="Project root (for config)."
 def self_update(
     root: str = typer.Option(".", help="Project root (for config)."),
     no_dashboard: bool = typer.Option(
-        False, "--no-dashboard", help="Skip the dashboard (pnpm) build."
+        False, "--no-dashboard", help="Skip the dashboard (npm) build."
     ),
 ) -> None:
-    """Pull the latest Iron Jarvis source and rebuild (git pull + uv sync + pnpm build).
+    """Pull the latest Iron Jarvis source and rebuild (git pull + uv sync + npm run build).
 
     Refuses if the working tree is dirty. This updates the FILES on disk only —
     you must restart the daemon (and dashboard) afterwards to load the new code.

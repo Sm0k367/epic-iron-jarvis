@@ -3,7 +3,7 @@
 // What this does:
 //   1. Spawns the Python daemon (dev: `uv run ironjarvis serve`; packaged: the
 //      frozen ironjarvis.exe) with a per-install IRONJARVIS_TOKEN.
-//   2. Spawns the Next.js dashboard (dev: `pnpm start`; packaged: standalone
+//   2. Spawns the Next.js dashboard (dev: `npm start`; packaged: standalone
 //      server.js via Electron's bundled Node).
 //   3. Shows a dark "Starting Iron Jarvis…" splash while polling the dashboard.
 //   4. When the dashboard answers, opens the real window (size/pos restored from
@@ -50,10 +50,10 @@ const windowState = require("./windowState");
 
 // Two run modes:
 //  - DEV (not packaged): the repo (daemon + ./dashboard) sits one dir above this
-//    file; we drive it via `uv run ironjarvis serve` + `pnpm start`.
+//    file; we drive it via `uv run ironjarvis serve` + `npm start`.
 //  - PACKAGED (installed .exe): a frozen daemon exe + a Next.js *standalone*
 //    server are bundled under resources/; we run them via the frozen exe and
-//    Electron's own bundled Node — NO Python, uv, Node, or pnpm required.
+//    Electron's own bundled Node — NO Python, uv, Node, or npm required.
 const IS_PACKAGED = app.isPackaged;
 const REPO_ROOT = path.join(__dirname, "..");
 const DASHBOARD_DIR = path.join(REPO_ROOT, "dashboard");
@@ -325,7 +325,7 @@ function fileLogger(label) {
 function spawnChild(label, command, args, cwd, extraEnv, useShell = true) {
   const child = spawn(command, args, {
     cwd,
-    // Dev resolves uv/pnpm via cmd.exe (shell:true); packaged spawns the frozen
+    // Dev resolves uv/npm via cmd.exe (shell:true); packaged spawns the frozen
     // exe and Electron's node binary directly (shell:false).
     shell: useShell,
     windowsHide: true,
@@ -346,7 +346,7 @@ function spawnChild(label, command, args, cwd, extraEnv, useShell = true) {
     });
   }
   child.on("error", (err) => {
-    // With shell:true the inner command (uv/pnpm) won't raise ENOENT here —
+    // With shell:true the inner command (uv/npm) won't raise ENOENT here —
     // that's covered by the preflight check below. This catches shell failures.
     console.error(`[${label}] spawn error:`, err.message);
     toFile(`[main] spawn error: ${err.message}\n`);
@@ -411,7 +411,7 @@ function notifyCrashLoop(label) {
 }
 
 // Resolve whether a command is on PATH (so we can show a friendly dialog
-// instead of silently timing out when uv/pnpm aren't installed).
+// instead of silently timing out when uv/npm aren't installed).
 function commandExists(cmd) {
   return new Promise((resolve) => {
     const probe = process.platform === "win32" ? "where" : "which";
@@ -1388,7 +1388,7 @@ async function startup() {
 
   if (IS_PACKAGED) {
     // PACKAGED: frozen daemon exe + standalone dashboard run by Electron's Node.
-    // No Python/uv/Node/pnpm required on the user's machine. Both children run
+    // No Python/uv/Node/npm required on the user's machine. Both children run
     // under the crash supervisor (auto-restart with backoff).
     const stateDir = userDataDir; // the daemon's .ironjarvis lives here
     // 1) Frozen daemon. Must serve on 8787 to match the build-time-baked client URL.
@@ -1422,21 +1422,21 @@ async function startup() {
       )
     );
   } else {
-    // DEV: drive the repo via uv + pnpm; preflight that they're installed.
-    const [hasUv, hasPnpm] = await Promise.all([
+    // DEV: drive the repo via uv + npm; preflight that they're installed.
+    const [hasUv, hasNpm] = await Promise.all([
       commandExists("uv"),
-      commandExists("pnpm"),
+      commandExists("npm"),
     ]);
     const missing = [];
     if (!hasUv) missing.push("uv          → https://docs.astral.sh/uv/getting-started/installation/");
-    if (!hasPnpm) missing.push("pnpm        → https://pnpm.io/installation");
+    if (!hasNpm) missing.push("npm         → https://nodejs.org (bundled with Node)");
     if (missing.length) {
       dialog.showErrorBox(
         "Iron Jarvis — missing prerequisites",
         "Could not find the required tool(s) on your PATH:\n\n" +
           "  - " + missing.join("\n  - ") + "\n\n" +
           "Iron Jarvis (dev mode) launches the local repo's Python daemon (via uv) and\n" +
-          "the Next.js dashboard (via pnpm). Install the tool(s) above, then relaunch."
+          "the Next.js dashboard (via npm). Install the tool(s) above, then relaunch."
       );
       isQuitting = true;
       shutdown();
@@ -1455,7 +1455,7 @@ async function startup() {
     );
     // 2) Next.js dashboard. `next start` honours the PORT env var.
     startService("dashboard", () =>
-      spawnChild("dashboard", "pnpm", ["start"], DASHBOARD_DIR, {
+      spawnChild("dashboard", "npm", ["start"], DASHBOARD_DIR, {
         PORT: String(DASHBOARD_PORT),
       })
     );
@@ -1486,7 +1486,7 @@ async function startup() {
         (IS_PACKAGED
           ? "Check the [dashboard] logs for details."
           : "Most common cause: the dashboard has not been built yet. Build it once:\n\n" +
-            "    cd dashboard\n    pnpm install\n    pnpm build\n\n" +
+            "    cd dashboard\n    npm install\n    npm run build\n\n" +
             "Then relaunch Iron Jarvis. Check the terminal for [daemon]/[dashboard] logs."),
       pendingUpdate
     );

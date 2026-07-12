@@ -3,20 +3,20 @@
     Build the SELF-CONTAINED Iron Jarvis Windows installer (NSIS .exe).
 
 .DESCRIPTION
-    End-to-end pipeline (the installed app needs NO Python / uv / Node / pnpm):
+    End-to-end pipeline (the installed app needs NO Python / uv / Node / npm at runtime):
       1. Freeze the daemon (PyInstaller)        -> packaging/dist/ironjarvis/
       2. Build the dashboard (Next standalone)  -> dashboard/.next/standalone/
       3. Stage .next/static (+ public) INTO the standalone bundle (Next won't)
       4. electron-builder                       -> desktop/release/*.exe
 
     Run from anywhere:
-        pnpm run dist:full       (from desktop/)
+        npm run dist:full        (from desktop/)
         powershell -ExecutionPolicy Bypass -File desktop\build-installer.ps1
 
 .PARAMETER SkipDaemon
     Reuse an existing packaging/dist/ironjarvis build (skip PyInstaller).
 .PARAMETER SkipDashboard
-    Reuse an existing dashboard/.next/standalone build (skip pnpm build).
+    Reuse an existing dashboard/.next/standalone build (skip npm run build).
 .PARAMETER Publish
     Publish the installer to GitHub Releases (CI only; needs GH_TOKEN). Off by
     default -- a local build never publishes anything.
@@ -26,7 +26,7 @@ param([switch]$SkipDaemon, [switch]$SkipDashboard, [switch]$Publish)
 
 $ErrorActionPreference = "Stop"
 
-# Run a native command (pnpm/electron-builder) WITHOUT letting its stderr abort
+# Run a native command (npm/electron-builder) WITHOUT letting its stderr abort
 # the script -- Windows PowerShell wraps native stderr in a terminating
 # NativeCommandError under EAP=Stop. We relax EAP for the call and check the
 # real exit code.
@@ -82,8 +82,8 @@ if (-not $SkipDashboard) {
     Write-Host "==> [2/4] Building the dashboard (Next standalone)..." -ForegroundColor Cyan
     Push-Location $Dashboard
     try {
-        Invoke-Native "pnpm install (dashboard)" { pnpm install }
-        Invoke-Native "pnpm build (dashboard)" { pnpm build }
+        Invoke-Native "npm install (dashboard)" { npm install }
+        Invoke-Native "npm run build (dashboard)" { npm run build }
     } finally { Pop-Location }
 }
 $Standalone = Join-Path $Dashboard ".next\standalone"
@@ -105,12 +105,12 @@ if (Test-Path $PublicSrc) { Copy-Item -Recurse -Force $PublicSrc (Join-Path $Sta
 Write-Host "==> [4/4] Packaging the installer (electron-builder)..." -ForegroundColor Cyan
 Push-Location $Desktop
 try {
-    Invoke-Native "pnpm install (desktop)" { pnpm install }
+    Invoke-Native "npm install (desktop)" { npm install }
     try {
         if ($Publish) {
-            Invoke-Native "electron-builder (publish)" { pnpm exec electron-builder --win --publish always }
+            Invoke-Native "electron-builder (publish)" { npx electron-builder --win --publish always }
         } else {
-            Invoke-Native "electron-builder" { pnpm dist }
+            Invoke-Native "electron-builder" { npm run dist }
         }
     } catch {
         if ("$_" -match "symbolic link" -or "$_" -match "winCodeSign") {

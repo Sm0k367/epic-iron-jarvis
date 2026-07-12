@@ -73,7 +73,7 @@ daemon's public URL, and make sure `.ironjarvis/` sits on a persistent `/data` v
 2. On the daemon service set `IRONJARVIS_TOKEN`, `IRONJARVIS_ROOT=/data` (and optionally
    `ANTHROPIC_API_KEY`), and attach a **Volume mounted at `/data`**.
 3. Add a **second service** from the same repo → Settings → Dockerfile Path =
-   `Dockerfile.dashboard`, Start Command = `pnpm start`. Set
+   `Dockerfile.dashboard`, Start Command = `npm start`. Set
    `NEXT_PUBLIC_IJ_API = https://${{daemon.RAILWAY_PUBLIC_DOMAIN}}` (Railway reference variable),
    and optionally `NEXT_PUBLIC_IJ_TOKEN`.
 4. Generate a public domain for each service. Healthcheck is `/health`.

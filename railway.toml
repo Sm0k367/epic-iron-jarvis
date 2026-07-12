@@ -18,7 +18,7 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # DASHBOARD service (Railway UI → New → GitHub repo → same repo → Settings):
 #     Build  → Dockerfile Path = Dockerfile.dashboard
-#     Deploy → Start Command   = pnpm start          # Next.js binds to $PORT
+#     Deploy → Start Command   = npm start           # Next.js binds to $PORT
 #     Variables:
 #         NEXT_PUBLIC_IJ_API   = https://${{daemon.RAILWAY_PUBLIC_DOMAIN}}
 #         NEXT_PUBLIC_IJ_TOKEN = <optional; SAME value as the daemon's IRONJARVIS_TOKEN>

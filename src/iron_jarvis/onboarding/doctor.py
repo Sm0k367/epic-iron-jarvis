@@ -155,18 +155,18 @@ def check_node() -> dict:
     )
 
 
-def check_pnpm() -> dict:
-    path = _which("pnpm")
+def check_npm() -> dict:
+    path = _which("npm")
     ok = path is not None
     return _result(
-        "pnpm",
+        "npm",
         ok,
-        f"pnpm found at {path}."
+        f"npm found at {path}."
         if ok
-        else "pnpm not found — only needed to install/run the web dashboard.",
+        else "npm not found — only needed to install/run the web dashboard.",
         fix=""
         if ok
-        else "Install pnpm: https://pnpm.io/installation (or run `corepack enable`). "
+        else "Install Node.js LTS (includes npm): https://nodejs.org. "
         "Dashboard-only.",
         level=RECOMMENDED,
     )
@@ -194,7 +194,7 @@ CHECKS = [
     check_uv,
     check_git,
     check_node,
-    check_pnpm,
+    check_npm,
     check_browser,
 ]
 

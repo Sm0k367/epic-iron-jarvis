@@ -89,7 +89,7 @@ Legend: ⬜ todo · 🔄 in progress · ✅ verified with proof
 ## WAVE D — Dashboard (§4)  → owns `dashboard/`
 - **T10.1** Next.js 15 (App Router) + `.npmrc` `node-linker=hoisted` + Tailwind; typed API client + WS event hook.
 - **T10.2** Views: Sessions (list/create + live transcript), Agent tree, Review (diff + approve/reject), Providers & Vault, Observability (event stream + metrics), Memory browser.
-- **Proof** `pnpm build` succeeds (prod, hoisted); puppeteer-core + real Chrome screenshot of the dashboard rendering live data from the daemon (per the Windows headless-screenshot method). Screenshot saved as proof.
+- **Proof** `npm run build` succeeds (prod); puppeteer-core + real Chrome screenshot of the dashboard rendering live data from the daemon (per the Windows headless-screenshot method). Screenshot saved as proof.
 
 ---
 

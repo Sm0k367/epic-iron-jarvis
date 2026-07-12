@@ -28,12 +28,12 @@ bearer token: `%APPDATA%/Iron Jarvis/token.txt` — every daemon request needs
 # Backend tests (~1038, offline, ~2min). ALWAYS run before shipping.
 uv run pytest -q --no-header
 # Dashboard build (must show "Generating static pages (40/40)")
-cd dashboard && pnpm build
+cd dashboard && npm run build
 # Syntax-check desktop changes
 cd desktop && node --check main.js
 # Dev run
 uv run ironjarvis serve            # daemon on 8787
-cd dashboard && pnpm dev           # dashboard
+cd dashboard && npm run dev           # dashboard
 ```
 
 ## Release flow (how the user receives your work)
