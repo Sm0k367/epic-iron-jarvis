@@ -8,6 +8,7 @@ that dedupes across a restart.
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -322,3 +323,116 @@ async def test_group_chat_message_is_refused(platform):
     assert results[0]["status"] == "non_private"
     assert orch.list_sessions() == []  # nothing ran
     assert fake.sent == []  # nothing broadcast
+
+
+# --------------------------------------------------------------------------- #
+# MEDIA INTENT — Telegram must generate + attach media when asked.
+# --------------------------------------------------------------------------- #
+def test_detect_media_intent_phrases():
+    d = InboundPoller._detect_media_intent
+    assert d("generate an image of a red fox") is True
+    assert d("Create a picture of the moon") is True
+    assert d("make me a logo for my brand") is True
+    assert d("draw a poster of a city") is True
+    assert d("text-to-image a cyberpunk street") is True
+    assert d("generate a video of waves") is True
+    assert d("compose a song about rain") is True
+    assert d("image of a cat") is True
+    # Non-media chat must stay false (no forced Pixio spend).
+    assert d("do the thing") is False
+    assert d("what time is it") is False
+    assert d("summarize this document") is False
+    assert d("") is False
+
+
+def test_media_kind_and_prompt_helpers():
+    assert InboundPoller._media_kind("generate a video of rain") == "video"
+    assert InboundPoller._media_kind("make a song about hope") == "audio"
+    assert InboundPoller._media_kind("draw a picture of a fox") == "image"
+    prompt = InboundPoller._media_prompt("generate an image of a red fox in neon")
+    assert "red fox" in prompt.lower()
+    assert "generate" not in prompt.lower()
+
+
+def test_pick_pixio_model_prefers_matching_kind():
+    models = [
+        {"id": "pixio/flux", "name": "Flux", "type": "image"},
+        {"id": "pixio/veo", "name": "Veo", "type": "video"},
+        {"id": "pixio/suno", "name": "Suno", "type": "audio"},
+    ]
+    assert InboundPoller._pick_pixio_model(models, kind="video") == "pixio/veo"
+    assert InboundPoller._pick_pixio_model(models, kind="audio") == "pixio/suno"
+    assert InboundPoller._pick_pixio_model(models, kind="image") == "pixio/flux"
+    assert InboundPoller._pick_pixio_model([], kind="image") == ""
+
+
+def test_collect_session_media_finds_pixio_outputs(tmp_path):
+    pix = tmp_path / "pixio"
+    pix.mkdir()
+    (pix / "gen.png").write_bytes(b"\x89PNG\r\n" + b"0" * 64)
+    (tmp_path / "notes.txt").write_text("not media")
+    found = InboundPoller._collect_session_media(str(tmp_path))
+    assert len(found) == 1 and found[0].name == "gen.png"
+
+
+async def test_media_request_uses_media_ack_and_fallback_when_no_files(platform, tmp_path, monkeypatch):
+    """When the user asks for media and the agent leaves no files, fallback runs.
+
+    We stub Pixio so the fallback writes a PNG into the session workspace and
+    Telegram send_media is recorded via a channel method override.
+    """
+    fake = FakeTelegram([_update(50, sender=777, text="generate an image of a blue robot")])
+    ch = _telegram(
+        fake,
+        {"token_secret": "tg_token", "inbound_enabled": True, "allowed_senders": [777]},
+    )
+    media_sent: list[str] = []
+
+    def _send_media(path, *, chat_id=None, caption="", kind=None):
+        media_sent.append(str(path))
+        return {"ok": True, "detail": "fake-media", "path": str(path)}
+
+    ch.send_media = _send_media  # type: ignore[method-assign]
+
+    poller, orch = _poller(platform, ch)
+
+    async def _fake_ensure(user_text, workspace, *, session_id=""):
+        root = Path(workspace)
+        root.mkdir(parents=True, exist_ok=True)
+        out = root / "pixio" / "fallback.png"
+        out.parent.mkdir(parents=True, exist_ok=True)
+        out.write_bytes(b"\x89PNG\r\n" + b"x" * 32)
+        return {"ok": True, "model_id": "pixio/flux", "saved_path": "pixio/fallback.png"}
+
+    monkeypatch.setattr(poller, "_ensure_media_generated", _fake_ensure)
+
+    results = await poller.poll_once()
+
+    assert results[0]["status"] == "handled"
+    assert results[0].get("media_intent") is True
+    assert results[0].get("media_fallback") is True
+    assert results[0].get("media_sent", 0) >= 1
+    assert media_sent, "send_media should have been called with the generated file"
+    msg_texts = [s.get("text") or "" for s in fake.sent if s.get("text")]
+    assert any("Generating that media" in t for t in msg_texts)
+
+
+async def test_non_media_message_does_not_force_fallback(platform, monkeypatch):
+    fake = FakeTelegram([_update(51, sender=777, text="what is 2+2")])
+    ch = _telegram(
+        fake,
+        {"token_secret": "tg_token", "inbound_enabled": True, "allowed_senders": [777]},
+    )
+    poller, orch = _poller(platform, ch)
+
+    called = {"n": 0}
+
+    async def _should_not_run(*_a, **_k):
+        called["n"] += 1
+        return {"ok": False, "error": "should not run"}
+
+    monkeypatch.setattr(poller, "_ensure_media_generated", _should_not_run)
+    results = await poller.poll_once()
+    assert results[0]["status"] == "handled"
+    assert results[0].get("media_intent") is False
+    assert called["n"] == 0

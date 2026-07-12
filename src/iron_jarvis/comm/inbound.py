@@ -28,6 +28,7 @@ blocks boot, and is cancelled on shutdown.
 from __future__ import annotations
 
 import asyncio
+import re
 from pathlib import Path
 from typing import Any
 
@@ -51,6 +52,39 @@ _MEDIA_EXTS = frozenset({
 })
 #: Cap how many files we push per reply (Telegram UX + rate limits).
 _MAX_MEDIA_PER_REPLY = 6
+
+#: User phrasing that means "generate media" (Telegram free-text path).
+#: Matched case-insensitively; keep high-precision so chatty messages don't
+#: force a Pixio spend.
+_MEDIA_INTENT_RX = re.compile(
+    r"(?is)\b("
+    r"generate|generat(?:e|ing|ed)|create|make|draw|render|paint|design|"
+    r"produce|compose|synthesize|imagine|illustrate"
+    r")\b.{0,80}\b("
+    r"image|images|picture|pictures|photo|photos|pic|pics|art|artwork|"
+    r"illustration|logo|icon|poster|thumbnail|wallpaper|avatar|"
+    r"video|videos|clip|clips|animation|animations|gif|gifs|"
+    r"audio|song|songs|music|track|sound|sounds|voiceover|"
+    r"media|visual|visuals"
+    r")\b"
+    r"|"
+    r"\b("
+    r"image|picture|photo|pic|art|logo|video|clip|song|music|audio|media"
+    r")\s+of\b"
+    r"|"
+    r"\b(text[- ]to[- ]image|text[- ]to[- ]video|text[- ]to[- ]audio|txt2img)\b"
+)
+
+_IMAGE_KIND_RX = re.compile(
+    r"(?is)\b(image|images|picture|pictures|photo|photos|pic|pics|art|artwork|"
+    r"illustration|logo|icon|poster|thumbnail|wallpaper|avatar|visual|visuals)\b"
+)
+_VIDEO_KIND_RX = re.compile(
+    r"(?is)\b(video|videos|clip|clips|animation|animations|gif|gifs|cinematic)\b"
+)
+_AUDIO_KIND_RX = re.compile(
+    r"(?is)\b(audio|song|songs|music|track|sound|sounds|voiceover|soundtrack)\b"
+)
 
 #: Public-facing denial when someone finds the bot (e.g. via X) without allowlist.
 _UNAUTHORIZED_REPLY = (
@@ -283,34 +317,27 @@ class InboundPoller:
         # Live chat UX: typing indicator + short "working" ack, then run the
         # session while refreshing typing so Telegram shows activity.
         chat_id = msg.reply_to
+        media_intent = self._detect_media_intent(text)
         await asyncio.to_thread(ch.typing, chat_id)
+        ack = (
+            "Generating that media for you…"
+            if media_intent
+            else "Working on it…"
+        )
         await asyncio.to_thread(
-            ch.send, self._format_reply("Working on it…"), chat_id=chat_id
+            ch.send, self._format_reply(ack), chat_id=chat_id
         )
 
-        # Full-capability free-text: BUILDER + lead model (Grok 4.5) with tools —
+        # Full-capability free-text: BUILDER + lead model with tools —
         # code, memory, docs, web, and Pixio media generation. Media files left in
         # the session workspace are attached on the reply after the summary.
+        # When the user clearly asked for media, the task is hard-required to
+        # call pixio_* AND we fall back to a direct Pixio generation if the
+        # agent finishes without leaving files (so Telegram always gets media).
         cfg = getattr(getattr(self.orchestrator, "p", None), "config", None)
         provider = getattr(cfg, "default_provider", None) if cfg else None
         model = getattr(cfg, "default_model", None) if cfg else None
-        task = (
-            "You are Epic Tech AI — the user's local AI operating system on this "
-            "machine (brand: Epic Tech AI · epictechai@gmail.com · X @EpicTechAI). "
-            "You are NOT Iron Jarvis.\n"
-            "Channel: Telegram. Reply in clear, concise plain text suitable for mobile.\n"
-            "FULL CAPABILITY — use tools when they help:\n"
-            "- Talk, plan, code, edit files in the workspace, search memory/LTM\n"
-            "- Read/write documents; create workflows/schedules when asked\n"
-            "- Web search when facts need a live lookup\n"
-            "- MEDIA: when the user wants an image, video, audio, or visual, use "
-            "pixio_models → pixio_params → pixio_generate (pixio_status if needed). "
-            "Save outputs under pixio/ in the workspace; the system will attach "
-            "those files to Telegram automatically.\n"
-            "Do not invent tool results. If you only need to talk, just talk.\n"
-            "Finish with a short plain-language summary of what you did.\n\n"
-            f"User message:\n{text}"
-        )
+        task = self._build_session_task(text, media_intent=media_intent)
         session = await self.orchestrator.create_session(
             task,
             self.agent_type,
@@ -324,7 +351,12 @@ class InboundPoller:
             notifier.suppress_session_alert(session.id)
         await self._publish(
             EventType.COMM_RECEIVED,
-            {"channel": name, "sender": msg.sender_id, "task": text},
+            {
+                "channel": name,
+                "sender": msg.sender_id,
+                "task": text,
+                "media_intent": bool(media_intent),
+            },
             session_id=session.id,
         )
 
@@ -338,6 +370,26 @@ class InboundPoller:
                 continue
         session = await run_task
 
+        workspace = getattr(session, "workspace_path", "") or ""
+        media_paths = self._collect_session_media(workspace)
+        media_fallback = False
+        media_error = ""
+
+        # Guarantee: if the user asked for media and the agent produced none,
+        # generate directly via Pixio and drop files into the session workspace.
+        if media_intent and not media_paths:
+            await asyncio.to_thread(ch.typing, chat_id)
+            try:
+                fb = await self._ensure_media_generated(
+                    text, workspace, session_id=getattr(session, "id", "") or ""
+                )
+                media_fallback = bool(fb.get("ok"))
+                media_error = str(fb.get("error") or "")
+                media_paths = self._collect_session_media(workspace)
+            except Exception as exc:  # noqa: BLE001 — never kill the text reply
+                log.exception("telegram media fallback failed")
+                media_error = f"{type(exc).__name__}: {exc}"
+
         reply = (session.summary or "").strip() or "(no result)"
         # Prefer a clean chat answer over a raw system dump / failed delegate.
         if reply.startswith("Delegated the task") or "all subtasks complete" in reply:
@@ -346,12 +398,36 @@ class InboundPoller:
                 "I can run tasks, workflows, tools, and generate media on this machine. "
                 "Ask me anything, or try /help for commands."
             )
+        if media_intent and media_paths:
+            if media_fallback:
+                reply = (
+                    f"Generated {len(media_paths)} media file(s) and attached "
+                    f"{'them' if len(media_paths) != 1 else 'it'} below."
+                )
+            elif not any(
+                token in reply.lower()
+                for token in ("generated", "image", "video", "audio", "media", "pixio")
+            ):
+                reply = (
+                    f"{reply.rstrip()}\n\n"
+                    f"Attached {len(media_paths)} generated media file(s)."
+                ).strip()
+        elif media_intent and not media_paths:
+            # Be honest when generation could not run (missing key / API error).
+            hint = media_error or (
+                "Pixio is not configured — add a secret named 'pixio' "
+                "(Connections / Secrets) or set PIXIO_API_KEY."
+            )
+            reply = (
+                f"{reply.rstrip()}\n\n"
+                f"Could not generate media: {hint}"
+            ).strip()
+
         body = self._format_reply(reply)
         # Safe to reply to the originating chat: we only reach here for the
         # sender's own private chat (the non-private guard above refused groups).
         send_res = await asyncio.to_thread(ch.send, body, chat_id=chat_id)
         media_sent = 0
-        media_paths = self._collect_session_media(getattr(session, "workspace_path", "") or "")
         send_media = getattr(ch, "send_media", None)
         if callable(send_media) and media_paths:
             await asyncio.to_thread(ch.typing, chat_id)
@@ -371,8 +447,249 @@ class InboundPoller:
             "session_id": session.id,
             "sent": bool(send_res.get("ok")),
             "detail": send_res.get("detail"),
+            "media_intent": bool(media_intent),
+            "media_fallback": media_fallback,
             "media_sent": media_sent,
+            **({"media_error": media_error} if media_error else {}),
         }
+
+    @staticmethod
+    def _detect_media_intent(text: str) -> bool:
+        """True when the user is clearly asking to generate image/video/audio."""
+        t = (text or "").strip()
+        if not t:
+            return False
+        return bool(_MEDIA_INTENT_RX.search(t))
+
+    @staticmethod
+    def _media_kind(text: str) -> str:
+        """Best-effort media kind for model selection: image | video | audio."""
+        t = text or ""
+        # Explicit modality keywords win; default to image for "generate a picture of…"
+        if re.search(r"(?is)\b(video|videos|clip|clips|animation|animations|gif|gifs)\b", t):
+            return "video"
+        if re.search(
+            r"(?is)\b(audio|song|songs|music|track|sound|sounds|voiceover|soundtrack)\b",
+            t,
+        ):
+            return "audio"
+        return "image"
+
+    def _build_session_task(self, text: str, *, media_intent: bool) -> str:
+        """Build the BUILDER task for a Telegram free-text message."""
+        base = (
+            "You are Epic Tech AI — the user's local AI operating system on this "
+            "machine (brand: Epic Tech AI · epictechai@gmail.com · X @EpicTechAI). "
+            "You are NOT Iron Jarvis.\n"
+            "Channel: Telegram. Reply in clear, concise plain text suitable for mobile.\n"
+            "FULL CAPABILITY — use tools when they help:\n"
+            "- Talk, plan, code, edit files in the workspace, search memory/LTM\n"
+            "- Read/write documents; create workflows/schedules when asked\n"
+            "- Web search when facts need a live lookup\n"
+            "- MEDIA: when the user wants an image, video, audio, or visual, use "
+            "pixio_models → pixio_params → pixio_generate (pixio_status if needed). "
+            "Save outputs under pixio/ in the workspace; the system will attach "
+            "those files to Telegram automatically.\n"
+            "Do not invent tool results. If you only need to talk, just talk.\n"
+            "Finish with a short plain-language summary of what you did.\n\n"
+        )
+        if media_intent:
+            kind = self._media_kind(text)
+            base += (
+                "MEDIA REQUEST — REQUIRED:\n"
+                f"The user asked you to GENERATE {kind} media. You MUST call "
+                "pixio_models, then pixio_params for the chosen model, then "
+                "pixio_generate with wait=true and a clear prompt derived from "
+                "their message. Do NOT only describe the media — actually generate "
+                "it. Leave the file under pixio/ in the workspace.\n"
+                "If Pixio is unavailable, say so plainly in the summary.\n\n"
+            )
+        return base + f"User message:\n{text}"
+
+    async def _ensure_media_generated(
+        self, user_text: str, workspace: str, *, session_id: str = ""
+    ) -> dict[str, Any]:
+        """Direct Pixio generation into the session workspace (Telegram guarantee).
+
+        Used when media intent was detected but the agent session left no media
+        files. Never raises — returns ``{ok, error?}``.
+        """
+        root = Path(workspace or "")
+        if not root.is_dir():
+            try:
+                root.mkdir(parents=True, exist_ok=True)
+            except OSError as exc:
+                return {"ok": False, "error": f"workspace missing: {exc}"}
+
+        platform = getattr(self.orchestrator, "p", None)
+        if platform is None:
+            return {"ok": False, "error": "no platform on orchestrator"}
+
+        secrets = getattr(platform, "secrets", None)
+        key = None
+        if secrets is not None:
+            try:
+                key = secrets.get("pixio") or secrets.get("pixio_api_key")
+            except Exception:  # noqa: BLE001
+                key = None
+        if not key:
+            import os
+
+            key = os.environ.get("PIXIO_API_KEY") or None
+        if not key:
+            return {
+                "ok": False,
+                "error": (
+                    "Pixio API key not configured — add secret 'pixio' "
+                    "or set PIXIO_API_KEY"
+                ),
+            }
+
+        from ..tools.base import ToolContext
+        from ..tools.pixio import PixioGenerateTool, PixioModelsTool
+
+        cfg = getattr(platform, "config", None)
+        event_bus = getattr(platform, "event_bus", None)
+        engine = getattr(platform, "engine", None)
+        artifacts = getattr(platform, "artifacts", None)
+
+        def _key_resolver() -> str | None:
+            return key
+
+        artifact_sink = None
+        if artifacts is not None and hasattr(artifacts, "save"):
+
+            def _sink(
+                name: str,
+                blob: bytes,
+                filename: str,
+                kind: str,
+                sid: str | None,
+            ) -> Any:
+                # Match ArtifactSink call order from pixio._deliver.
+                return artifacts.save(
+                    name,
+                    blob,
+                    kind=kind or "file",
+                    filename=filename,
+                    session_id=sid,
+                )
+
+            artifact_sink = _sink
+
+        # ToolContext requires config/event_bus/engine; when missing, tools still
+        # only need workspace for delivery.
+        if cfg is None or event_bus is None or engine is None:
+            return {"ok": False, "error": "platform incomplete for media generation"}
+
+        ctx = ToolContext(
+            workspace=root,
+            session_id=session_id or "comm-media",
+            agent_run_id="comm-media-fallback",
+            config=cfg,
+            event_bus=event_bus,
+            engine=engine,
+        )
+
+        models_tool = PixioModelsTool(
+            key_resolver=_key_resolver, artifact_sink=artifact_sink
+        )
+        gen_tool = PixioGenerateTool(
+            key_resolver=_key_resolver, artifact_sink=artifact_sink
+        )
+
+        models_res = await models_tool.execute({}, ctx)
+        if not models_res.ok:
+            return {"ok": False, "error": models_res.error or "pixio_models failed"}
+
+        model_id = self._pick_pixio_model(
+            (models_res.data or {}).get("models") or [],
+            kind=self._media_kind(user_text),
+        )
+        if not model_id:
+            return {"ok": False, "error": "no suitable Pixio model available"}
+
+        prompt = self._media_prompt(user_text)
+        gen_res = await gen_tool.execute(
+            {
+                "model_id": model_id,
+                "params": {"prompt": prompt},
+                "wait": True,
+                "timeout_seconds": 300,
+            },
+            ctx,
+        )
+        if not gen_res.ok:
+            return {"ok": False, "error": gen_res.error or "pixio_generate failed"}
+        return {
+            "ok": True,
+            "model_id": model_id,
+            "saved_path": (gen_res.data or {}).get("saved_path"),
+        }
+
+    @staticmethod
+    def _pick_pixio_model(models: list[Any], *, kind: str) -> str:
+        """Choose a model id from pixio_models output for the requested media kind."""
+        if not isinstance(models, list):
+            return ""
+        rows: list[tuple[str, str, str]] = []
+        for model in models:
+            if not isinstance(model, dict):
+                continue
+            mid = str(model.get("id") or model.get("modelId") or "").strip()
+            if not mid:
+                continue
+            name = str(model.get("name") or "").lower()
+            mtype = str(model.get("type") or model.get("category") or "").lower()
+            rows.append((mid, name, mtype))
+        if not rows:
+            return ""
+
+        kind = (kind or "image").lower()
+        prefer_tokens = {
+            "image": ("image", "img", "flux", "sdxl", "sd3", "photo", "illust"),
+            "video": ("video", "veo", "runway", "kling", "minimax", "luma", "clip"),
+            "audio": ("audio", "music", "song", "sound", "tts", "voice", "suno"),
+        }.get(kind, ("image", "flux"))
+
+        def score(row: tuple[str, str, str]) -> int:
+            mid, name, mtype = row
+            blob = f"{mid} {name} {mtype}".lower()
+            s = 0
+            for tok in prefer_tokens:
+                if tok in blob:
+                    s += 10
+            # Prefer ids that look like the requested modality in type field.
+            if kind in mtype:
+                s += 20
+            # Mild preference for shorter "default-looking" models.
+            if "flux" in blob and kind == "image":
+                s += 5
+            return s
+
+        rows.sort(key=score, reverse=True)
+        best = rows[0]
+        if score(best) <= 0 and kind != "image":
+            # Fall back to first image-ish model rather than failing hard.
+            for row in rows:
+                if score(row) > 0 or "image" in f"{row[1]} {row[2]}":
+                    return row[0]
+        return best[0]
+
+    @staticmethod
+    def _media_prompt(user_text: str) -> str:
+        """Strip command-y words so the generator gets a clean creative prompt."""
+        t = (user_text or "").strip()
+        # Drop leading generate/create/make phrases for a cleaner prompt.
+        t = re.sub(
+            r"(?is)^\s*(please\s+)?(can you\s+|could you\s+)?"
+            r"(generate|create|make|draw|render|design|produce|compose)\s+"
+            r"(me\s+)?(an?\s+)?(image|picture|photo|pic|art|logo|video|clip|"
+            r"song|music|audio|media)\s*(of|for|showing|with|:)?\s*",
+            "",
+            t,
+        ).strip()
+        return t or (user_text or "").strip() or "abstract digital art"
 
     @staticmethod
     def _collect_session_media(workspace: str) -> list[Path]:

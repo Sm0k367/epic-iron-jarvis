@@ -110,6 +110,36 @@ Open a private chat with **`@EpicTechAI_bot`** (or whatever username you registe
 
 Replies look like: **`Epic Tech AI: …`**
 
+## Media generation (images / video / audio)
+
+When an **allowlisted** user asks the bot to generate media in free text, e.g.:
+
+- `generate an image of a red fox`
+- `create a logo for my brand`
+- `make a video of ocean waves`
+- `compose a song about rain`
+
+Epic Tech AI will:
+
+1. Run a full agent session with **required** Pixio tools (`pixio_models` → `pixio_params` → `pixio_generate`)
+2. If the agent finishes **without** media files, run a **direct Pixio fallback** into the session workspace
+3. **Attach** generated files on the Telegram reply (`sendPhoto` / `sendVideo` / `sendAudio` / document)
+
+**Required for media:** a Pixio key in the vault.
+
+| Place | Secret name |
+|-------|-------------|
+| Secrets / Connections | `pixio` |
+| `.env` (bootstrap) | `PIXIO_API_KEY` → loaded as vault `pixio` |
+
+```powershell
+# after setting PIXIO_API_KEY in .env:
+uv run python scripts/load_env_to_vault.py
+# restart the daemon so Telegram + tools see the key
+```
+
+Without Pixio, the bot replies with a clear error instead of silently skipping media.
+
 ## Safety (built-in)
 
 - **Inbound off** until you set `inbound_enabled=true`
@@ -117,6 +147,7 @@ Replies look like: **`Epic Tech AI: …`**
 - **Private chat only** — group messages that would broadcast to others are refused
 - Bot messages ignored (no loops)
 - Agent tools still pass the normal permission engine
+- Media generation only for allowlisted private chats (never groups / unauthorized)
 
 Never add untrusted user ids to the allowlist. Never put the bot token in git or public issues.
 
@@ -139,6 +170,7 @@ Then prefer Dashboard → Channels (or vault names) so the notifier wires the ch
 | Test send fails | Token valid? Chat id correct? You must have started a chat with the bot once |
 | 409 getUpdates conflict | Only one poller — don't run two daemons with the same token |
 | Commands work, free text doesn't | Provider connected? Check Connections + Usage |
+| Text reply but no image/video | Connect **Pixio** (`pixio` secret / `PIXIO_API_KEY`); restart daemon; ask again with “generate an image of …” |
 
 ## Related
 
