@@ -20,7 +20,9 @@ def test_provider_failover_is_a_typed_event() -> None:
 
 def test_background_completion_kinds_alert_by_default() -> None:
     defaults = notifier.DEFAULT_ALERT_EVENTS
-    assert EventType.SESSION_COMPLETED in defaults
+    # SESSION_COMPLETED is no longer a default push-alert (Telegram chat replies
+    # already carry the answer; session spam was confusing).
+    assert EventType.SESSION_COMPLETED not in defaults
     assert EventType.AUTONOMY_EXECUTED in defaults
     assert EventType.PROVIDER_FAILOVER in defaults
 

@@ -49,13 +49,22 @@ class CommandInterpreter:
         if not text.startswith("/"):
             return None
         cmd, _, rest = text[1:].partition(" ")
-        cmd = cmd.lower().strip()
+        # Telegram menu sends "/status@EpicTechAI_bot" — strip the @bot suffix.
+        cmd = cmd.lower().strip().split("@", 1)[0]
         rest = rest.strip()
+        # /start is the standard Telegram entry — treat as help.
+        if cmd == "start":
+            cmd = "help"
         try:
             handler = getattr(self, f"_cmd_{cmd}", None)
             if handler is None:
                 return f"Unknown command '/{cmd}'. Send /help for the list."
-            return await handler(rest)
+            out = await handler(rest)
+            # Never return blank — empty body becomes "Epic Tech AI:" alone in chat.
+            if out is None:
+                return None
+            out = str(out).strip()
+            return out if out else "Done."
         except Exception as exc:  # noqa: BLE001 — a command must never crash comm
             log.exception("command '/%s' failed", cmd)
             return f"'/{cmd}' failed: {type(exc).__name__}: {exc}"
@@ -73,11 +82,14 @@ class CommandInterpreter:
         with session_scope(self.p.engine) as db:
             runs = list(db.exec(select(WorkflowRunRecord)))
         live = sum(1 for r in runs if r.status in ("running", "cancelling"))
+        # No brand prefix here — inbound adds REPLY_PREFIX once.
         return (
-            f"Epic Tech AI v{__version__}\n"
+            f"v{__version__} online\n"
             f"Model: {cfg.default_provider}/{cfg.default_model}\n"
             f"Workflows: {live} running, {len(runs)} total\n"
-            f"Sessions: {len(self.orch.list_sessions(limit=200))} recent"
+            f"Sessions: {len(self.orch.list_sessions(limit=200))} recent\n"
+            f"Bot: t.me/EpicTechAI_bot\n"
+            f"Send /help or any task in plain English."
         )
 
     async def _cmd_balance(self, _rest: str) -> str:

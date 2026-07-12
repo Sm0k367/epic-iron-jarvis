@@ -145,10 +145,10 @@ async def test_authorized_sender_spawns_supervised_session_and_replies(platform)
 
     assert len(results) == 1 and results[0]["status"] == "handled"
     sessions = orch.list_sessions()
-    # Supervisor may spawn child sessions — at least one root task matches.
-    assert any(s.task == "do the thing" for s in sessions)
-    root = next(s for s in sessions if s.task == "do the thing")
-    assert root.agent_type.value == "supervisor"
+    # Free-text uses BUILDER with a brand-aware task wrapper.
+    assert any("do the thing" in (s.task or "") for s in sessions)
+    root = next(s for s in sessions if "do the thing" in (s.task or ""))
+    assert root.agent_type.value == "builder"
     # Ack ("Working on it…") + final summary; typing posts sendChatAction too.
     msg_texts = [s for s in fake.sent if s.get("text")]
     assert len(msg_texts) >= 2

@@ -54,7 +54,9 @@ class InboundPoller:
         *,
         event_bus: Any = None,
         poll_timeout: int = 0,
-        agent_type: AgentType = AgentType.SUPERVISOR,
+        # BUILDER answers free-text chat directly; SUPERVISOR only "delegates"
+        # and produces useless Telegram summaries under headless permissions.
+        agent_type: AgentType = AgentType.BUILDER,
         reply_prefix: str = "Epic Tech AI: ",
         max_reply_chars: int = 3500,
         command_interpreter: Any = None,
@@ -206,7 +208,7 @@ class InboundPoller:
             await asyncio.to_thread(ch.typing, msg.reply_to)
             reply = await self.command_interpreter.interpret(text)
             if reply is not None:
-                body = f"{self.reply_prefix}{reply}"[: self.max_reply_chars]
+                body = self._format_reply(reply)
                 send_res = await asyncio.to_thread(ch.send, body, chat_id=msg.reply_to)
                 await self._publish(
                     EventType.COMM_RECEIVED,
@@ -215,8 +217,9 @@ class InboundPoller:
                 return {
                     "channel": name,
                     "status": "command",
-                    "command": text.split()[0],
+                    "command": text.split()[0].split("@", 1)[0],
                     "sent": bool(send_res.get("ok")),
+                    "detail": send_res.get("detail"),
                 }
 
         # REFLEX (comm): a non-command message that matches a keyword rule fires
@@ -245,12 +248,30 @@ class InboundPoller:
         # session while refreshing typing so Telegram shows activity.
         chat_id = msg.reply_to
         await asyncio.to_thread(ch.typing, chat_id)
-        ack = f"{self.reply_prefix}Working on it…"[: self.max_reply_chars]
-        await asyncio.to_thread(ch.send, ack, chat_id=chat_id)
+        await asyncio.to_thread(
+            ch.send, self._format_reply("Working on it…"), chat_id=chat_id
+        )
 
-        # Spawn a NORMAL supervised session (same orchestrator + permission
-        # engine as a local user) and await its result.
-        session = await self.orchestrator.create_session(text, self.agent_type)
+        # Conversational free-text: BUILDER + default cloud/local model, with a
+        # brand-aware prompt so "who are you?" is answered as Epic Tech AI.
+        cfg = getattr(getattr(self.orchestrator, "p", None), "config", None)
+        provider = getattr(cfg, "default_provider", None) if cfg else None
+        model = getattr(cfg, "default_model", None) if cfg else None
+        task = (
+            "You are Epic Tech AI — a local-first AI operating system assistant "
+            "on the user's machine (brand: Epic Tech AI, contact epictechai@gmail.com, "
+            "X @EpicTechAI). You are NOT Iron Jarvis. "
+            "Answer the user's message directly in a short, clear Telegram reply. "
+            "Do not invent tool results. If you only need to talk, just talk.\n\n"
+            f"User message:\n{text}"
+        )
+        session = await self.orchestrator.create_session(
+            task,
+            self.agent_type,
+            provider=provider,
+            model=model,
+            origin="comm",
+        )
         # Suppress the generic session.completed push-alert — we reply in-chat.
         notifier = getattr(self, "notifier", None)
         if notifier is not None and hasattr(notifier, "suppress_session_alert"):
@@ -271,14 +292,15 @@ class InboundPoller:
                 continue
         session = await run_task
 
-        reply = (session.summary or "(no result)").strip()
-        # Prefer a clean chat answer over a raw system dump.
-        if reply.startswith("Delegated the task"):
+        reply = (session.summary or "").strip() or "(no result)"
+        # Prefer a clean chat answer over a raw system dump / failed delegate.
+        if reply.startswith("Delegated the task") or "all subtasks complete" in reply:
             reply = (
-                "Done — I broke the task into sub-steps and finished them.\n\n"
-                f"{reply}"
+                "I'm Epic Tech AI — your local AI OS assistant. "
+                "I can run tasks, workflows, and tools on this machine. "
+                "Ask me anything, or try /help for commands."
             )
-        body = f"{self.reply_prefix}{reply}"[: self.max_reply_chars]
+        body = self._format_reply(reply)
         # Safe to reply to the originating chat: we only reach here for the
         # sender's own private chat (the non-private guard above refused groups).
         send_res = await asyncio.to_thread(ch.send, body, chat_id=chat_id)
@@ -287,7 +309,19 @@ class InboundPoller:
             "status": "handled",
             "session_id": session.id,
             "sent": bool(send_res.get("ok")),
+            "detail": send_res.get("detail"),
         }
+
+    def _format_reply(self, reply: str) -> str:
+        """Always produce a non-empty Telegram message body."""
+        body = (reply or "").strip() or "…"
+        # Avoid double brand prefix if the payload already includes it.
+        prefix = self.reply_prefix or ""
+        if body.startswith(prefix.strip()) or body.startswith("Epic Tech AI"):
+            text = body
+        else:
+            text = f"{prefix}{body}"
+        return text[: self.max_reply_chars]
 
     async def _publish(self, etype: str, payload: dict[str, Any], **kw: Any) -> None:
         if self.event_bus is None:
