@@ -33,6 +33,11 @@ type AIResult = {
   model: string;
   /** Skill playbooks injected into this answer (names). */
   skills?: string[];
+  mode?: "assist" | "agent";
+  session_id?: string | null;
+  status?: string | null;
+  media?: string[];
+  workspace_path?: string | null;
 };
 
 type ConnState = "connecting" | "open" | "reconnecting" | "closed";
@@ -94,13 +99,15 @@ export function TerminalPane({
   // The live WS, exposed to the AI bar so "Run" can type into THIS shell.
   const wsRef = useRef<WebSocket | null>(null);
 
-  // --- Per-pane AI assist (suggest-only; Run is an explicit click) ---------
+  // --- Per-pane AI: Assist (fast suggest) or Agent (full BUILDER tools) ---
   const [aiOpen, setAiOpen] = useState(false);
   const [aiPrompt, setAiPrompt] = useState("");
   const [aiBusy, setAiBusy] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
   const [aiResult, setAiResult] = useState<AIResult | null>(null);
   const [choice, setChoice] = useState(""); // "" = the app's default model
+  // assist = one-shot suggest; agent = full-capability session in this cwd
+  const [aiMode, setAiMode] = useState<"assist" | "agent">("agent");
   // Skill for the assist: "" = Auto (search the library), "none" = off,
   // anything else = that exact skill. Works with EVERY provider (prompt-side).
   const [skillChoice, setSkillChoice] = useState("");
@@ -151,6 +158,7 @@ export function TerminalPane({
         model,
         skill: skillChoice,
         include_terminals: ctxIds,
+        mode: aiMode,
       });
       setAiResult(res);
     } catch (err) {
@@ -611,19 +619,53 @@ export function TerminalPane({
         </div>
       )}
 
-      {/* AI assist bar — asks about THIS terminal's recent output; the answer's
-          command is only ever TYPED into the shell (never auto-submitted). */}
+      {/* AI bar — Assist (fast suggest) or Agent (full tools in this cwd).
+          Suggested commands are only ever TYPED into the shell (never auto-run). */}
       {aiOpen && (
         <div className="shrink-0 border-b border-white/[0.06] bg-ink-900/40 px-3 py-2">
-          <form onSubmit={askAI} className="flex items-center gap-2">
+          <form onSubmit={askAI} className="flex flex-wrap items-center gap-2">
             <Sparkles size={12} className="shrink-0 text-accent-soft" />
+            <div
+              className="flex shrink-0 overflow-hidden rounded-md border border-white/10"
+              role="group"
+              aria-label="AI mode"
+            >
+              <button
+                type="button"
+                onClick={() => setAiMode("assist")}
+                className={`px-2 py-1 text-[10px] font-medium transition-colors ${
+                  aiMode === "assist"
+                    ? "bg-accent/20 text-accent-soft"
+                    : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-300"
+                }`}
+                title="Fast one-shot help — suggests a command"
+              >
+                Assist
+              </button>
+              <button
+                type="button"
+                onClick={() => setAiMode("agent")}
+                className={`px-2 py-1 text-[10px] font-medium transition-colors ${
+                  aiMode === "agent"
+                    ? "bg-accent/20 text-accent-soft"
+                    : "text-zinc-500 hover:bg-white/[0.04] hover:text-zinc-300"
+                }`}
+                title="Full Epic Tech AI agent in this folder — tools, media, web, files"
+              >
+                Agent
+              </button>
+            </div>
             <input
               type="text"
               value={aiPrompt}
               onChange={(e) => setAiPrompt(e.target.value)}
-              placeholder="Ask about this terminal — e.g. “why did that fail?” or “command to list the 5 biggest files”"
+              placeholder={
+                aiMode === "agent"
+                  ? "Agent: build, fix, generate media, search… (full tools in this folder)"
+                  : "Assist: why did that fail? or suggest a command…"
+              }
               aria-label="Ask AI about this terminal"
-              className="field flex-1 py-1 text-[12px]"
+              className="field min-w-[12rem] flex-1 py-1 text-[12px]"
             />
             {/* Skill for this ask: Auto searches the whole discovered library
                 (Claude + Codex + yours) — works with ANY provider. */}
@@ -712,9 +754,10 @@ export function TerminalPane({
               type="submit"
               disabled={aiBusy || !aiPrompt.trim()}
               className="btn-accent shrink-0 px-2 py-1 text-[11px]"
+              title={aiMode === "agent" ? "Run full agent in this folder" : "Ask for a suggestion"}
             >
               {aiBusy ? <Loader2 size={12} className="animate-spin" /> : <CornerDownLeft size={12} />}
-              Ask
+              {aiMode === "agent" ? "Run" : "Ask"}
             </button>
           </form>
           {aiError && (
@@ -724,10 +767,14 @@ export function TerminalPane({
           )}
           {aiResult && (
             <div className="mt-1.5 space-y-1.5">
-              <p className="max-h-24 overflow-y-auto whitespace-pre-wrap text-[11px] leading-relaxed text-zinc-300">
+              <p
+                className={`overflow-y-auto whitespace-pre-wrap text-[11px] leading-relaxed text-zinc-300 ${
+                  aiResult.mode === "agent" ? "max-h-48" : "max-h-24"
+                }`}
+              >
                 {aiResult.reply}
               </p>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 {aiResult.command && (
                   <button
                     onClick={runSuggested}
@@ -739,8 +786,18 @@ export function TerminalPane({
                   </button>
                 )}
                 <span className="text-[10px] text-zinc-600">
+                  {aiResult.mode === "agent" ? "agent · " : ""}
                   {aiResult.provider} · {aiResult.model}
+                  {aiResult.session_id ? ` · ${aiResult.session_id.slice(0, 16)}…` : ""}
                 </span>
+                {(aiResult.media ?? []).length > 0 && (
+                  <span
+                    title={(aiResult.media ?? []).join("\n")}
+                    className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 text-[9px] font-medium text-emerald-300"
+                  >
+                    media: {(aiResult.media ?? []).length}
+                  </span>
+                )}
                 {(aiResult.skills ?? []).map((s) => (
                   <span
                     key={s}

@@ -148,19 +148,91 @@ def register(app: FastAPI, d) -> None:
 
     @app.post("/terminals/{term_id}/ai")
     async def terminal_ai(term_id: str, body: TerminalAIBody) -> dict[str, Any]:
-        """Per-terminal AI assist with a PER-PANE model choice.
+        """Per-terminal AI: Assist (suggest) or full Agent (BUILDER + tools).
 
-        Sends the terminal's recent (ANSI-stripped) output tail + the user's
-        question to the chosen model and returns the reply plus the first
-        fenced code block as a suggested command. SUGGEST-ONLY: nothing is ever
-        written into the shell here — running the suggestion is an explicit
-        click in the UI, which types it through the normal WebSocket path.
+        **assist** — one-shot completion; returns reply + optional fenced command
+        (never auto-typed). **agent** — supervised BUILDER session rooted at the
+        terminal's cwd with full tools (files, web, Pixio media, memory, …) on
+        the lead model; returns work summary + optional command + session_id.
         """
         session = d.platform.terminals.get(term_id)
         if session is None:
             raise HTTPException(status_code=404, detail="no such terminal")
-        provider = body.provider or d.platform.config.default_provider
-        model = body.model or d.platform.config.default_model
+        provider = (body.provider or "").strip() or d.platform.config.default_provider
+        model = (body.model or "").strip() or d.platform.config.default_model
+        mode = (body.mode or "assist").strip().lower()
+        if mode not in ("assist", "agent"):
+            mode = "assist"
+
+        # --- FULL AGENT MODE: real BUILDER in the terminal's working directory ---
+        if mode == "agent":
+            from ...core.models import AgentType
+            from ...comm.inbound import InboundPoller
+
+            tail = session.output_tail()[-6000:]
+            shared = ""
+            for other_id in (body.include_terminals or [])[:3]:
+                if other_id == term_id:
+                    continue
+                other = d.platform.terminals.get(other_id)
+                if other is None:
+                    continue
+                other_tail = other.output_tail()[-4000:]
+                if other_tail.strip():
+                    shared += (
+                        f"\n\n--- Output from ANOTHER terminal "
+                        f"({other.shell} @ {other.cwd}) ---\n{other_tail}"
+                    )
+            task = (
+                "You are Epic Tech AI — full-capability Builder on the user's machine "
+                "(brand: Epic Tech AI · epictechai@gmail.com · @EpicTechAI). "
+                "You are NOT Iron Jarvis.\n"
+                f"You are working in this terminal's directory: {session.cwd}\n"
+                f"Shell: {session.shell}\n"
+                "FULL CAPABILITY — use tools when helpful: files, shell (when allowed), "
+                "memory, documents, web_search, pixio_* media generation, workflows.\n"
+                "When you generate media, leave files under pixio/ in the workspace.\n"
+                "If the best next step is a shell command for the user, put EXACTLY ONE "
+                "command alone in a fenced code block at the end.\n"
+                "Never invent tool results. Finish with a clear plain-language summary.\n\n"
+                f"Recent terminal output (truncated):\n{tail or '(none)'}\n"
+                f"{shared}\n\n"
+                f"User request:\n{body.prompt.strip()}"
+            )
+            orch = d.orchestrator
+            sess = await orch.create_session(
+                task,
+                AgentType.BUILDER,
+                provider=provider,
+                model=model,
+                workspace_root=str(session.cwd) if session.cwd else None,
+                origin="terminal_agent",
+            )
+            sess = await orch.run_session(sess.id)
+            reply = (sess.summary or "").strip() or "(no result)"
+            media: list[str] = []
+            try:
+                media = [
+                    str(p)
+                    for p in InboundPoller._collect_session_media(
+                        getattr(sess, "workspace_path", "") or ""
+                    )
+                ]
+            except Exception:  # noqa: BLE001
+                media = []
+            return {
+                "reply": reply,
+                "command": _first_code_block(reply),
+                "provider": sess.provider or provider,
+                "model": sess.model or model,
+                "skills": [],
+                "mode": "agent",
+                "session_id": sess.id,
+                "status": getattr(sess.status, "value", str(sess.status)),
+                "media": media,
+                "workspace_path": getattr(sess, "workspace_path", None),
+            }
+
         try:
             adapter = d.platform.providers.get(provider, model)
         except Exception as exc:  # unknown provider / no credential
@@ -170,12 +242,16 @@ def register(app: FastAPI, d) -> None:
         tail = session.output_tail()[-6000:]  # bound the context we bill for
         shell_os = "Windows" if os.name == "nt" else "POSIX"
         system = (
-            "You are a terminal assistant embedded in a dashboard shell pane "
-            f"(shell: {session.shell}, OS: {shell_os}). "
-            "Answer the user's question about their recent terminal output "
-            "briefly and concretely. When the best answer is a command to run, "
-            "put EXACTLY ONE command alone in a fenced code block; explain in "
-            "one or two sentences at most. Never invent output."
+            "You are Epic Tech AI — a full-capability terminal copilot embedded in "
+            f"the Build workspace (shell: {session.shell}, OS: {shell_os}, "
+            f"cwd: {session.cwd}). Brand: Epic Tech AI · epictechai@gmail.com · "
+            "@EpicTechAI. You are NOT Iron Jarvis.\n"
+            "Answer about the recent terminal output concretely. Prefer working "
+            "commands for this shell/OS. When the best answer is a command to run, "
+            "put EXACTLY ONE command alone in a fenced code block; explain briefly. "
+            "You may outline multi-step plans. Never invent output. "
+            "For deep multi-tool work (media gen, large refactors), tell the user "
+            "to switch this pane to Agent mode."
         )
         # Skills: make the WHOLE discovered library (builtin + user + Claude +
         # Codex) usable by ANY provider — as prompt injection, not tool calls,
@@ -239,6 +315,11 @@ def register(app: FastAPI, d) -> None:
             "provider": used_provider,
             "model": used_model or model,
             "skills": skills_used,
+            "mode": "assist",
+            "session_id": None,
+            "status": None,
+            "media": [],
+            "workspace_path": None,
         }
 
     @app.get("/terminals/{term_id}/context")
@@ -251,7 +332,7 @@ def register(app: FastAPI, d) -> None:
             raise HTTPException(status_code=404, detail="no such terminal")
         tail = session.output_tail()
         text = (
-            f"[Context from an Iron Jarvis terminal — {session.shell} @ {session.cwd}]\n"
+            f"[Context from an Epic Tech AI terminal — {session.shell} @ {session.cwd}]\n"
             f"{tail.strip() or '(no output yet)'}"
         )
         return {"text": text, "chars": len(text)}

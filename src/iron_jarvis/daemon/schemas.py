@@ -363,7 +363,13 @@ class IntegrationCreate(BaseModel):
 
 
 class TerminalAIBody(BaseModel):
-    """Per-terminal AI assist: a question + an optional per-PANE model choice.
+    """Per-terminal AI assist / agent: a question + optional per-PANE model.
+
+    ``mode``:
+      * ``assist`` (default) — fast one-shot completion; suggests a command.
+      * ``agent`` — full BUILDER session in the terminal's cwd (tools, media,
+        files, web, Pixio) using the lead model; returns a work summary +
+        optional command to type into the shell.
 
     ``skill``: "" = AUTO (search the skill library for the best match to the
     prompt and inject it), "none" = no skill injection, anything else = force
@@ -375,6 +381,7 @@ class TerminalAIBody(BaseModel):
     provider: str = ""
     model: str = ""
     skill: str = ""
+    mode: str = "assist"  # assist | agent
     #: Other terminal ids whose recent output to INCLUDE as context — share
     #: what's happening in one terminal with another (and with whatever model
     #: THIS pane uses). Bounded server-side (max 3 terminals, ~4KB each).
